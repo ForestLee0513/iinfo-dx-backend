@@ -1,21 +1,23 @@
 # iinfo-dx-backend
 
-FastAPI 기반 백엔드 템플릿입니다. 로컬 실행과 Docker 실행을 모두 지원하며, **Supabase Auth**(구글 OAuth / 이메일 로그인) 기반 인증을 사용합니다.
+FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지원하며, **Supabase Auth**(구글 OAuth / 이메일 로그인) 기반 인증과 **난이도표 크롤링 → Supabase 주간 동기화** 기능을 제공합니다.
 
 ## 기술 스택
 
 - **Python** 3.12
-- **FastAPI** 0.115.x
-- **Uvicorn** (ASGI 서버)
+- **FastAPI** 0.115.x / **Uvicorn** (ASGI 서버)
 - **Pydantic v2** / **pydantic-settings** (스키마 및 환경설정)
 - **PyJWT** (Supabase 액세스 토큰 검증)
+- **httpx** + **BeautifulSoup4** (크롤링/파싱)
+- **supabase-py** (크롤링 결과 동기화)
+- **APScheduler** (주 1회 스케줄링)
 
 ## 프로젝트 구조
 
 ```
 .
 ├── app/
-│   ├── main.py              # FastAPI 앱 엔트리포인트
+│   ├── main.py              # FastAPI 앱 엔트리포인트 (lifespan에서 스케줄러 기동)
 │   ├── core/
 │   │   └── config.py        # 환경설정 (.env 로드)
 │   ├── api/
@@ -23,9 +25,22 @@ FastAPI 기반 백엔드 템플릿입니다. 로컬 실행과 Docker 실행을 �
 │   │   ├── router.py        # API 라우터 집합 (/api/v1) — 공개/인증필수 구분
 │   │   └── endpoints/
 │   │       ├── health.py    # 헬스체크 (공개)
-│   │       └── auth.py      # 내 정보 조회 (인증 필수)
+│   │       ├── auth.py      # 내 정보 조회 (인증 필수)
+│   │       └── crawl.py     # 크롤링 수동 동기화/미리보기 (인증 필수)
+│   ├── crawlers/            # 크롤러 레지스트리
+│   │   ├── base.py          # TableDef/TableResult/레지스트리
+│   │   ├── sheet_5ch.py     # 5ch Google Sheets 크롤러 (GRADE)
+│   │   └── numeric_example.py # 숫자형 표 크롤러 템플릿 (NUMERIC)
+│   ├── parsers/
+│   │   └── sheet_parser.py  # pubhtml 파싱 (지력/개인차 판별)
+│   ├── services/
+│   │   ├── crawl_service.py # 크롤링 → 동기화 파이프라인 (run_full_sync)
+│   │   ├── supabase_sync.py # sync_table_result RPC 호출 (service role)
+│   │   └── scheduler.py     # APScheduler 주간 크론
 │   └── schemas/
 │       └── user.py          # 인증 사용자 스키마
+├── supabase/
+│   └── migrations/          # Supabase 마이그레이션 SQL
 ├── requirements.txt
 ├── Dockerfile
 ├── docker-compose.yml
@@ -82,7 +97,80 @@ def read_current_user(current_user: CurrentUser):
 | 엔드포인트 | 인증 |
 |-----------|------|
 | `GET /api/v1/health` | 공개 |
+| `GET /api/v1/tables` | 공개 |
+| `GET /api/v1/tables/{slug}` | 공개 |
+| `GET /api/v1/crawl/targets` | 공개 |
+| `GET /api/v1/crawl/preview` | 공개 |
 | `GET /api/v1/auth/me` | 인증 필수 |
+
+## 크롤링 & 주간 동기화
+
+난이도표를 크롤링해 Supabase에 반영하는 파이프라인입니다. 반영은 **주간 스케줄러로만** 이뤄지며 수동 트리거 엔드포인트는 없습니다(수동 갱신은 별도 레포에서 처리). 프론트엔드는 공개 `GET /api/v1/tables` 로 결과를 조회합니다.
+
+```
+[APScheduler 주 1회 크론] ──→ run_full_sync
+    → CRAWL_TARGETS 순회 → 타깃의 "crawler" 값으로 크롤러 선택·실행
+    → 표(TableResult) 단위로 sync_table_result RPC 호출
+    → difficulty_tables upsert + difficulty_entries 전체 교체 + crawl_sync_logs 기록 (단일 트랜잭션)
+```
+
+### 1. Supabase 마이그레이션 적용
+
+`supabase/migrations/20260702000000_crawl_sync.sql`을 적용합니다. 두 방법 중 택 1:
+
+```bash
+# 방법 A: Supabase CLI
+supabase link --project-ref <project-ref>
+supabase db push
+
+# 방법 B: Supabase 대시보드 > SQL Editor에 파일 내용 붙여넣고 실행
+```
+
+생성되는 것: `difficulty_tables`(표 정의), `difficulty_entries`(곡 엔트리), `crawl_sync_logs`(동기화 이력), `sync_table_result` RPC. 표 데이터는 공개 읽기(RLS), 쓰기는 service role 전용입니다.
+
+### 2. 환경변수 설정
+
+```dotenv
+SUPABASE_SERVICE_ROLE_KEY=eyJ...   # Project Settings > API > service_role
+CRAWL_TARGETS=[{"crawler":"5ch_sheet","url":"https://docs.google.com/spreadsheets/.../pubhtml","play_style":"SP","level":12}]
+```
+
+### 3. 주간 스케줄
+
+서버 기동 시 APScheduler가 등록되며, 기본값은 **매주 월요일 05:00 (Asia/Seoul)** 입니다. `.env`로 변경할 수 있습니다:
+
+```dotenv
+CRAWL_SCHEDULE_ENABLED=true   # false로 끄기
+CRAWL_SCHEDULE_DAY=mon        # mon/tue/wed/thu/fri/sat/sun
+CRAWL_SCHEDULE_HOUR=5
+CRAWL_SCHEDULE_MINUTE=0
+```
+
+### 4. 표 조회 / 미리보기
+
+```bash
+# 난이도표 목록 조회 (공개)
+curl http://localhost:8000/api/v1/tables
+
+# 표 1개 + 엔트리 조회 (공개)
+curl http://localhost:8000/api/v1/tables/5ch-sp12-strength
+
+# 크롤러 목록 확인 (등록된 크롤러 이름)
+curl http://localhost:8000/api/v1/crawl/targets
+
+# 선택한 크롤러로 미리보기 (Supabase 반영 없음, 공개)
+# 실제 크롤 경로를 그대로 태우므로 반환값 = 동기화될 표/엔트리
+curl -X POST http://localhost:8000/api/v1/crawl/preview \
+  -H "Content-Type: application/json" \
+  -d '{"crawler": "5ch_sheet", "target": {"url": "<pubhtml-url>", "play_style": "SP", "level": 12}}'
+```
+
+### 새 난이도표 추가하기
+
+1. `app/crawlers/`에 크롤러 클래스를 구현하고 `@register("이름")`을 붙입니다 (숫자형 표는 `numeric_example.py` 템플릿의 `_parse`만 구현).
+2. `.env`의 `CRAWL_TARGETS`에 `{"crawler": "이름", ...설정}`을 추가합니다.
+
+스키마/동기화 코드는 수정할 필요 없습니다.
 
 ## 사전 준비
 
