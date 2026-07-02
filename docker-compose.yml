@@ -1,0 +1,15 @@
+services:
+  api:
+    container_name: iinfo-dx-backend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # 로컬 코드 변경이 컨테이너에 즉시 반영됨 (--reload와 함께 개발용)
+      - ./app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
