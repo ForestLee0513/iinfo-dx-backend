@@ -1,6 +1,6 @@
 """크롤링 진단/미리보기 엔드포인트 (공개 — 쓰기 경로 없음).
 
-실제 Supabase 반영은 주간 크롤링 스케줄러(app/crawl/scheduler.py)로만 이뤄진다.
+실제 Supabase 반영은 주간 크롤링 스케줄러(app/difficulty_crawl/scheduler.py)로만 이뤄진다.
 여기서는 크롤러 구성 확인과 크롤러 미리보기만 제공한다(쓰기 없음).
 """
 
@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.config import settings
-from app.crawl.crawlers import CRAWLER_REGISTRY, get_crawler
+from app.difficulty_crawl.crawlers import CRAWLER_REGISTRY, get_crawler
 
 router = APIRouter()
 
@@ -27,7 +27,7 @@ class ScheduleInfo(BaseModel):
 
 class TargetsResponse(BaseModel):
     registered_crawlers: list[str]
-    targets: list[dict]  # CRAWL_TARGETS 설정 (크롤러별 키가 달라 dict)
+    targets: list[dict]  # TABLE_CRAWL_TARGETS 설정 (크롤러별 키가 달라 dict)
     schedule: ScheduleInfo
 
 
@@ -39,7 +39,7 @@ class TargetsResponse(BaseModel):
 def list_targets():
     return {
         "registered_crawlers": list(CRAWLER_REGISTRY),
-        "targets": settings.CRAWL_TARGETS,
+        "targets": settings.TABLE_CRAWL_TARGETS,
         "schedule": {
             "enabled": settings.CRAWL_SCHEDULE_ENABLED,
             "day": settings.CRAWL_SCHEDULE_DAY,

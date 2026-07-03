@@ -1,6 +1,6 @@
 # iinfo-dx-backend
 
-FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지원하며, **Supabase Auth**(구글 OAuth / 이메일 로그인) 기반 인증과 **난이도표 크롤링 → Supabase 주간 동기화** 기능을 제공합니다.
+FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지원하며, **Supabase Auth**(구글 OAuth / 이메일 로그인) 기반 인증과 **곡 마스터(textage.cc) + 난이도표 크롤링 → Supabase 주간 동기화** 기능을 제공합니다.
 
 ## 기술 스택
 
@@ -17,7 +17,7 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 ```
 .
 ├── app/                     # 모듈러 모놀리식 (단일 앱, 모듈별 라우터를 /api/v1/{모듈}로 마운트)
-│   ├── main.py              # FastAPI 엔트리포인트 (web/crawl/admin/health 마운트 + 스케줄러 기동)
+│   ├── main.py              # FastAPI 엔트리포인트 (web/songs-crawl/difficulty-crawl/admin/health 마운트 + 스케줄러 기동)
 │   ├── core/
 │   │   └── config.py        # 환경설정 (.env 로드) — 전역 공유
 │   ├── common/              # 모듈 공유 코드
@@ -31,11 +31,16 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 │   │   └── endpoints/
 │   │       ├── tables.py    # 난이도표 목록/상세 (공개)
 │   │       └── me.py        # 내 정보 조회 (인증 필수)
-│   ├── crawl/               # /crawl/* : 크롤링 서비스
+│   ├── songs_crawl/         # /songs-crawl/* : 곡 마스터 크롤링 (textage.cc)
 │   │   ├── router.py        # targets/preview (공개)
-│   │   ├── pipeline.py      # 크롤링 → 동기화 파이프라인 (run_full_sync)
+│   │   ├── pipeline.py      # 크롤링 → 동기화 파이프라인 (run_song_sync)
+│   │   ├── sync.py          # sync_song_master RPC 호출(쓰기, service role)
+│   │   └── crawlers/        # 곡 마스터 크롤러 레지스트리 (base/textage)
+│   ├── difficulty_crawl/    # /difficulty-crawl/* : 난이도표 크롤링
+│   │   ├── router.py        # targets/preview (공개)
+│   │   ├── pipeline.py      # 크롤링 → 동기화 파이프라인 (run_table_sync)
 │   │   ├── sync.py          # sync_table_result RPC 호출(쓰기, service role)
-│   │   ├── scheduler.py     # APScheduler 주간 크론
+│   │   ├── scheduler.py     # APScheduler 주간 크론 (곡 마스터 → 난이도표 순차 실행)
 │   │   ├── crawlers/        # 크롤러 레지스트리 (base/sheet_5ch/numeric_example)
 │   │   └── parsers/         # pubhtml 파싱 (지력/개인차 판별)
 │   └── admin/               # /admin/* : 어드민 API (자리표시자 — 미구현)
@@ -75,10 +80,11 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 단일 앱(모듈러 모놀리식)에 모듈별 라우터를 `/api/v1/{모듈}` 프리픽스로 마운트합니다 (`app/main.py`):
 
 ```python
-app.include_router(health.router, prefix="/api/v1/health", tags=["Health"])
-app.include_router(web_router,    prefix="/api/v1/web",    tags=["Web"])
-app.include_router(crawl_router,  prefix="/api/v1/crawl",  tags=["Crawl"])
-app.include_router(admin_router,  prefix="/api/v1/admin",  tags=["Admin"])  # 자리표시자
+app.include_router(health.router,           prefix="/api/v1/health",           tags=["Health"])
+app.include_router(web_router,              prefix="/api/v1/web",              tags=["Web"])
+app.include_router(songs_crawl_router,      prefix="/api/v1/songs-crawl",      tags=["SongsCrawl"])
+app.include_router(difficulty_crawl_router, prefix="/api/v1/difficulty-crawl", tags=["DifficultyCrawl"])
+app.include_router(admin_router,            prefix="/api/v1/admin",            tags=["Admin"])  # 자리표시자
 ```
 
 인증이 필요한 엔드포인트는 `CurrentUser` 타입을 파라미터로 받습니다 (라우터 전체를 보호하려면 `dependencies=[Depends(get_current_user)]`):
@@ -97,24 +103,33 @@ def read_current_user(current_user: CurrentUser):
 | `GET /api/v1/web/tables` | 공개 |
 | `GET /api/v1/web/tables/{slug}` | 공개 |
 | `GET /api/v1/web/me` | 인증 필수 |
-| `GET /api/v1/crawl/targets` | 공개 |
-| `POST /api/v1/crawl/preview` | 공개 |
+| `GET /api/v1/songs-crawl/targets` | 공개 |
+| `GET /api/v1/songs-crawl/preview` | 공개 |
+| `GET /api/v1/difficulty-crawl/targets` | 공개 |
+| `POST /api/v1/difficulty-crawl/preview` | 공개 |
 | `/api/v1/admin/*` | (미구현 — 별도 어드민 레포 예정) |
 
 ## 크롤링 & 주간 동기화
 
-난이도표를 크롤링해 Supabase에 반영하는 파이프라인입니다. 반영은 **주간 스케줄러로만** 이뤄지며 수동 트리거 엔드포인트는 없습니다(수동 갱신은 별도 레포에서 처리). 프론트엔드는 공개 `GET /api/v1/web/tables` 로 결과를 조회합니다.
+곡 마스터(textage.cc)와 난이도표를 크롤링해 Supabase에 반영하는 파이프라인입니다. 반영은 **주간 스케줄러로만** 이뤄지며 수동 트리거 엔드포인트는 없습니다(수동 갱신은 별도 레포에서 처리). 프론트엔드는 공개 `GET /api/v1/web/tables` 로 결과를 조회합니다.
+
+주간 스케줄러 하나가 **곡 마스터 → 난이도표** 순서로 실행합니다. 순서는 시간차가 아니라 코드로 보장되며, 곡 마스터가 실패해도 난이도표 동기화는 기존 곡 마스터 기준으로 계속 진행합니다.
 
 ```
-[APScheduler 주 1회 크론] ──→ run_full_sync
-    → CRAWL_TARGETS 순회 → 타깃의 "crawler" 값으로 크롤러 선택·실행
-    → 표(TableResult) 단위로 sync_table_result RPC 호출
-    → difficulty_tables upsert + difficulty_entries 전체 교체 + crawl_sync_logs 기록 (단일 트랜잭션)
+[APScheduler 주 1회 크론] ──→ run_weekly_sync
+    ① run_song_sync (곡 마스터)
+       → SONG_CRAWL_TARGETS 순회 → 타깃의 "crawler" 값으로 크롤러 선택·실행 (textage)
+       → SongMasterResult 단위로 sync_song_master RPC 호출
+       → versions/songs/charts upsert + 크롤에 없는 곡/채보 in_ac=false (단일 트랜잭션, 삭제 없음)
+    ② run_table_sync (난이도표)
+       → TABLE_CRAWL_TARGETS 순회 → 타깃의 "crawler" 값으로 크롤러 선택·실행
+       → 표(TableResult) 단위로 sync_table_result RPC 호출
+       → difficulty_tables upsert + difficulty_entries 전체 교체 + crawl_sync_logs 기록 (단일 트랜잭션)
 ```
 
 ### 1. Supabase 마이그레이션 적용
 
-`supabase/migrations/20260702000000_crawl_sync.sql`을 적용합니다. 두 방법 중 택 1:
+`supabase/migrations/` 아래 SQL(`20260702000000_crawl_sync.sql`, `20260703000000_song_master.sql`)을 적용합니다. 두 방법 중 택 1:
 
 ```bash
 # 방법 A: Supabase CLI
@@ -124,13 +139,14 @@ supabase db push
 # 방법 B: Supabase 대시보드 > SQL Editor에 파일 내용 붙여넣고 실행
 ```
 
-생성되는 것: `difficulty_tables`(표 정의), `difficulty_entries`(곡 엔트리), `crawl_sync_logs`(동기화 이력), `sync_table_result` RPC. 표 데이터는 공개 읽기(RLS), 쓰기는 service role 전용입니다.
+생성되는 것: `difficulty_tables`(표 정의), `difficulty_entries`(곡 엔트리), `crawl_sync_logs`(동기화 이력), `sync_table_result` RPC + 곡 마스터용 `versions`/`songs`/`charts`, `sync_song_master` RPC. 데이터는 공개 읽기(RLS), 쓰기는 service role 전용입니다.
 
 ### 2. 환경변수 설정
 
 ```dotenv
 SUPABASE_SERVICE_ROLE_KEY=eyJ...   # Project Settings > API > service_role
-CRAWL_TARGETS=[{"crawler":"5ch_sheet","url":"https://docs.google.com/spreadsheets/.../pubhtml","play_style":"SP","level":12}]
+SONG_CRAWL_TARGETS=[{"crawler":"textage"}]
+TABLE_CRAWL_TARGETS=[{"crawler":"5ch_sheet","url":"https://docs.google.com/spreadsheets/.../pubhtml","play_style":"SP","level":12}]
 ```
 
 ### 3. 주간 스케줄
@@ -154,21 +170,25 @@ curl http://localhost:8000/api/v1/web/tables
 curl http://localhost:8000/api/v1/web/tables/5ch-sp12-strength
 
 # 크롤러 목록 확인 (등록된 크롤러 이름)
-curl http://localhost:8000/api/v1/crawl/targets
+curl http://localhost:8000/api/v1/difficulty-crawl/targets
 
 # 선택한 크롤러로 미리보기 (Supabase 반영 없음, 공개)
 # 실제 크롤 경로를 그대로 태우므로 반환값 = 동기화될 표/엔트리
-curl -X POST http://localhost:8000/api/v1/crawl/preview \
+curl -X POST http://localhost:8000/api/v1/difficulty-crawl/preview \
   -H "Content-Type: application/json" \
   -d '{"crawler": "5ch_sheet", "target": {"url": "<pubhtml-url>", "play_style": "SP", "level": 12}}'
+
+# 곡 마스터 크롤 타깃 확인 / 미리보기 (textage SLOTS 검증용, Supabase 반영 없음)
+curl http://localhost:8000/api/v1/songs-crawl/targets
+curl "http://localhost:8000/api/v1/songs-crawl/preview?title=AA&limit=5"
 ```
 
 ### 새 난이도표 추가하기
 
-1. `app/crawl/crawlers/`에 크롤러 클래스를 구현하고 `@register("이름")`을 붙입니다 (숫자형 표는 `numeric_example.py` 템플릿의 `_parse`만 구현).
-2. `.env`의 `CRAWL_TARGETS`에 `{"crawler": "이름", ...설정}`을 추가합니다.
+1. `app/difficulty_crawl/crawlers/`에 크롤러 클래스를 구현하고 `@register("이름")`을 붙입니다 (숫자형 표는 `numeric_example.py` 템플릿의 `_parse`만 구현).
+2. `.env`의 `TABLE_CRAWL_TARGETS`에 `{"crawler": "이름", ...설정}`을 추가합니다.
 
-스키마/동기화 코드는 수정할 필요 없습니다.
+스키마/동기화 코드는 수정할 필요 없습니다. 곡 마스터 소스를 추가할 때도 동일한 패턴으로 `app/songs_crawl/crawlers/` + `SONG_CRAWL_TARGETS`만 수정합니다 (두 모듈은 레지스트리가 분리되어 있습니다).
 
 ## 사전 준비
 
