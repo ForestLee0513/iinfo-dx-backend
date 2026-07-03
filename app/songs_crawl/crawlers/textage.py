@@ -74,8 +74,14 @@ _IDENT_VALUES: dict[str, int] = {
     "SS": 35,  # titletbl substream 버전
 }
 
-# JS 오브젝트 리터럴에서 '태그':[...] 엔트리 추출
-_ENTRY_RE = re.compile(r"'(?P<tag>[^']+)'\s*:\s*\[(?P<body>[^\]]*)\]")
+# JS 오브젝트 리터럴에서 '태그':[...] 엔트리 추출.
+# body는 문자열 리터럴 또는 ]/따옴표가 아닌 문자들의 나열 — 곡명 안의 ']'
+# ("Friction[!]Function", "[ ]DENTITY" 등)에서 행이 끊기지 않게 한다.
+_ENTRY_RE = re.compile(
+    r"'(?P<tag>[^']+)'\s*:\s*\["
+    r"(?P<body>(?:\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|[^\]\"'])*)"
+    r"\]"
+)
 # 배열 본문에서 문자열("..." / '...'), 정수, 식별자(A~F/SS 등) 토큰 추출.
 # 문자열이 먼저 통째로 소비되므로 식별자 대안은 따옴표 밖에서만 매칭된다.
 _TOKEN_RE = re.compile(
@@ -137,6 +143,11 @@ class TextageCrawler:
         seen_versions: set[int] = set()
 
         for tag, row in title_tbl.items():
+            # AC 곡 리스트의 기준은 actbl이다 (scrlist.js가 `for (tag in mt)`로
+            # actbl 키를 순회). titletbl에만 있는 행(CS 전용곡, __dmy__ 더미,
+            # 채보 뷰어 전용 변형 등)은 곡 마스터에 넣지 않는다.
+            if tag not in act_tbl:
+                continue
             # [버전, 독자ID, 옵션, 장르, 아티스트, 곡명, (부제)]
             if len(row) < 6:
                 continue
