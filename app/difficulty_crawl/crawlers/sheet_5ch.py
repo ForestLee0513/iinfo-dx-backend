@@ -3,8 +3,8 @@
 import httpx
 
 from app.core.config import settings
-from app.crawl.crawlers.base import DEFAULT_HEADERS, TableDef, TableResult, register
-from app.crawl.parsers.sheet_parser import parse_sheet
+from app.difficulty_crawl.crawlers.base import DEFAULT_HEADERS, TableDef, TableResult, register
+from app.difficulty_crawl.parsers.sheet_parser import parse_sheet
 
 GRADES_5CH = ["F", "E", "D", "C", "B", "A", "S", "S+"]
 

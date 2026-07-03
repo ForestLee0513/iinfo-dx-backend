@@ -6,16 +6,16 @@ import logging
 import httpx
 
 from app.core.config import settings
-from app.crawl.crawlers import get_crawler  # import 시 크롤러 레지스트리 등록됨
-from app.crawl.sync import log_sync_failure, sync_table_result
+from app.difficulty_crawl.crawlers import get_crawler  # import 시 크롤러 레지스트리 등록됨
+from app.difficulty_crawl.sync import log_sync_failure, sync_table_result
 
 logger = logging.getLogger(__name__)
 _sync_lock = asyncio.Lock()
 
 
-async def run_full_sync(triggered_by: str = "schedule") -> dict:
+async def run_table_sync(triggered_by: str = "schedule") -> dict:
     """
-    CRAWL_TARGETS 순회 → 각 타깃의 'crawler' 값으로 크롤러 선택 → Supabase 반영.
+    TABLE_CRAWL_TARGETS 순회 → 각 타깃의 'crawler' 값으로 크롤러 선택 → Supabase 반영.
     주간 스케줄러에서만 호출된다(수동 트리거 엔드포인트 없음).
     """
     if _sync_lock.locked():
@@ -26,7 +26,7 @@ async def run_full_sync(triggered_by: str = "schedule") -> dict:
         all_results: list[dict] = []
 
         async with httpx.AsyncClient() as client:
-            for target in settings.CRAWL_TARGETS:
+            for target in settings.TABLE_CRAWL_TARGETS:
                 crawler_name = target["crawler"]
 
                 try:

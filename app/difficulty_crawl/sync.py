@@ -7,7 +7,7 @@
 import logging
 
 from app.common.supabase import get_supabase
-from app.crawl.crawlers.base import TableResult
+from app.difficulty_crawl.crawlers.base import TableResult
 
 logger = logging.getLogger(__name__)
 
