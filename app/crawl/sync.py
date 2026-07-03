@@ -1,29 +1,15 @@
-"""Supabase 동기화 — sync_table_result RPC 호출.
+"""Supabase 동기화(쓰기) — sync_table_result RPC 호출.
 
-service role 키를 사용하므로 RLS를 우회한다. 이 키는 절대 클라이언트에
-노출하면 안 되며 백엔드 환경변수로만 관리한다.
-
+공통 클라이언트(app.common.supabase.get_supabase)를 사용한다.
 스키마/RPC 정의: supabase/migrations/20260702000000_crawl_sync.sql
 """
 
 import logging
-from functools import lru_cache
 
-from supabase import Client, create_client
-
-from app.core.config import settings
-from app.crawlers.base import TableResult
+from app.common.supabase import get_supabase
+from app.crawl.crawlers.base import TableResult
 
 logger = logging.getLogger(__name__)
-
-
-@lru_cache
-def get_supabase() -> Client:
-    if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_ROLE_KEY:
-        raise RuntimeError(
-            "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 환경변수가 필요합니다"
-        )
-    return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
 
 
 def sync_table_result(result: TableResult, triggered_by: str) -> dict:

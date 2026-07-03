@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import settings
-from app.services.crawl_service import run_full_sync
+from app.crawl.pipeline import run_full_sync
 
 logger = logging.getLogger(__name__)
 

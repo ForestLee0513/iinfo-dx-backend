@@ -6,8 +6,8 @@ import logging
 import httpx
 
 from app.core.config import settings
-from app.crawlers import get_crawler  # import 시 크롤러 레지스트리 등록됨
-from app.services.supabase_sync import log_sync_failure, sync_table_result
+from app.crawl.crawlers import get_crawler  # import 시 크롤러 레지스트리 등록됨
+from app.crawl.sync import log_sync_failure, sync_table_result
 
 logger = logging.getLogger(__name__)
 _sync_lock = asyncio.Lock()
