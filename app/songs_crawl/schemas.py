@@ -28,6 +28,7 @@ class SongPreview(BaseModel):
     genre: str | None = None
     artist: str | None = None
     version: int | None = None
+    in_ac: bool = True  # actbl 상태플래그 bit0 (false = tt2/firebrick 삭제곡)
     charts: list[ChartPreview]
 
 
