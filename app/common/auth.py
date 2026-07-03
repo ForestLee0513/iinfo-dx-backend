@@ -9,14 +9,14 @@ get_current_user를 엔드포인트 파라미터 또는 라우터의 dependencie
 """
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Callable
 
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
-from app.common.schemas import AuthUser
+from app.common.schemas import AuthUser, UserRole
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -72,12 +72,41 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    app_metadata = payload.get("app_metadata") or {}
     return AuthUser(
         id=payload["sub"],
         email=payload.get("email"),
-        provider=(payload.get("app_metadata") or {}).get("provider"),
+        provider=app_metadata.get("provider"),
         role=payload.get("role"),
+        app_role=_extract_app_role(app_metadata),
     )
 
 
+def _extract_app_role(app_metadata: dict) -> UserRole:
+    """app_metadata.role → UserRole. 미설정/알 수 없는 값은 USER로 강등(기본 최소 권한)."""
+    raw = str(app_metadata.get("role") or "").strip().upper()
+    try:
+        return UserRole(raw)
+    except ValueError:
+        return UserRole.USER
+
+
 CurrentUser = Annotated[AuthUser, Depends(get_current_user)]
+
+
+def require_role(required: UserRole) -> Callable[..., AuthUser]:
+    """역할 검사 의존성 팩토리 — 요구 역할 '이상'(ROLE_LEVELS 서열)만 통과시킨다.
+
+    사용: user: Annotated[AuthUser, Depends(require_role(UserRole.ADMIN))]
+    역할이 늘어나면 UserRole/ROLE_LEVELS에만 추가하면 기존 검사가 그대로 동작한다.
+    """
+
+    def checker(user: CurrentUser) -> AuthUser:
+        if not user.has_role(required):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"{required.value} 권한이 필요합니다.",
+            )
+        return user
+
+    return checker

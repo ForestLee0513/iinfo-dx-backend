@@ -8,12 +8,13 @@
 from fastapi import APIRouter
 
 from app.common.auth import CurrentUser
+from app.common.openapi import PUBLIC
 from app.common.schemas import AuthUser
 
 router = APIRouter()
 
 
-@router.get("/me", response_model=AuthUser)
+@router.get("/me", response_model=AuthUser, openapi_extra=PUBLIC)
 def read_current_user(current_user: CurrentUser):
     """현재 로그인한 사용자 정보 조회 (인증 필수)."""
     return current_user

@@ -6,18 +6,19 @@
 
 from fastapi import APIRouter, HTTPException
 
+from app.common.openapi import PUBLIC
 from app.web.queries import fetch_table, fetch_tables
 from app.web.schemas import TableDetail, TableListResponse
 
 router = APIRouter()
 
 
-@router.get("", summary="난이도표 목록 조회", response_model=TableListResponse)
+@router.get("", summary="난이도표 목록 조회", response_model=TableListResponse, openapi_extra=PUBLIC)
 def list_tables():
     return {"tables": fetch_tables()}
 
 
-@router.get("/{slug}", summary="난이도표 1개 + 엔트리 조회", response_model=TableDetail)
+@router.get("/{slug}", summary="난이도표 1개 + 엔트리 조회", response_model=TableDetail, openapi_extra=PUBLIC)
 def get_table(slug: str):
     table = fetch_table(slug)
     if table is None:
