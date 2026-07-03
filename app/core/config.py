@@ -18,6 +18,23 @@ class Settings(BaseSettings):
     SUPABASE_JWT_SECRET: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
 
+    # 백엔드 주도 OAuth 허용 프로바이더 (.env에서 JSON 배열 한 줄).
+    # 애플 등 추가 시 OAUTH_PROVIDERS=["google","apple"]처럼 이름만 늘리면 된다
+    # — 코드 수정 불필요. 단 Supabase 대시보드에서 해당 프로바이더 활성화와
+    # 콜백 URL(Redirect URLs) 등록이 선행돼야 한다.
+    OAUTH_PROVIDERS: list[str] = ["google"]
+
+    # OAuth 로그인 완료 후 브라우저를 돌려보낼 FE URL.
+    # 설정하면 /auth/callback이 JSON 대신 이 주소로 303 리다이렉트한다
+    # (FE는 랜딩 후 POST /auth/refresh로 access token을 받는다).
+    # 비워두면 콜백이 세션 JSON을 그대로 반환한다 (개발용).
+    AUTH_SUCCESS_REDIRECT_URL: str = ""
+
+    # 인증 쿠키(refresh token 등) SameSite 정책.
+    # FE가 API와 다른 사이트(등록 도메인 자체가 다름)에서 붙으면 "none"으로
+    # (Secure가 자동 강제됨). 같은 도메인/서브도메인 구성이면 "lax"면 충분하다.
+    AUTH_COOKIE_SAMESITE: str = "lax"
+
     # 크롤링 설정
     REQUEST_TIMEOUT: int = 15
     MAX_CONCURRENT: int = 10
