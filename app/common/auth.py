@@ -30,9 +30,21 @@ def _jwks_client() -> jwt.PyJWKClient:
 
 
 def _decode_token(token: str) -> dict:
+    """토큰 헤더의 alg에 따라 검증 경로를 선택한다.
+
+    SUPABASE_JWT_SECRET이 설정돼 있어도 비대칭(ES256/RS256) 토큰은 JWKS로
+    검증한다 — 새 JWT Signing Keys로 마이그레이션한 프로젝트에서 secret이
+    남아 있으면 모든 검증이 실패하던 문제 방지 (마이그레이션 과도기에
+    HS256/ES256 토큰이 섞여 들어와도 각자 맞는 경로로 검증된다).
+    """
     issuer = f"{settings.SUPABASE_URL}/auth/v1"
-    if settings.SUPABASE_JWT_SECRET:
+    alg = jwt.get_unverified_header(token).get("alg")
+    if alg == "HS256":
         # 레거시 프로젝트: 대칭 키(HS256) 검증
+        if not settings.SUPABASE_JWT_SECRET:
+            raise jwt.InvalidTokenError(
+                "HS256 토큰이지만 SUPABASE_JWT_SECRET이 설정되지 않았습니다"
+            )
         return jwt.decode(
             token,
             settings.SUPABASE_JWT_SECRET,
