@@ -54,7 +54,14 @@ The two crawl modules have **separate registries and target lists**: `SONG_CRAWL
 ### textage song master crawler
 `textage` (`app/songs_crawl/crawlers/textage.py`) fetches `titletbl.js` / `actbl.js` (Shift-JIS — decode with `cp932`; titles contain HTML tags) and returns a `SongMasterResult` → `sync_song_master` RPC (upsert `versions` / `songs` / `charts`; rows missing from the crawl get `in_ac=false`, never deleted). `songs.textage_tag` is the stable song identifier.
 
-**Verify before trusting `actbl` parsing**: only DP-ANOTHER (idx 19) and DP-LEGGENDARIA (idx 21) slot positions are externally confirmed; other `SLOTS` entries are provisional. Check `/songs-crawl/preview?title=<known song>` against known levels and fix `SLOTS` if wrong. textage is a single-maintainer hobby site — two file fetches per weekly run, nothing more aggressive.
+`actbl` parsing gotchas (all verified against textage's own `scrlist.js` rendering code — re-check there if the site changes):
+- Slot layout: `actbl[tag][type*2+1]` = level, `[type*2+2]` = option bits (`get_level`). Levels 10–15 appear as bare identifiers `A`–`F`, and `titletbl` uses `SS`(=35) for substream — the tokenizer maps these; dropping them silently shifts rows and caps every level at 9.
+- Deleted-song detection: `actbl[tag][0]` bit0 == 0 (rendered as `class=tt2`/firebrick on textage) → `in_ac=false`. **Only** this flag decides deletion — inline title colors like `.fontcolor("#ff4080")` are decoration (new-song markers etc.), never deletion markers.
+- Titles carry JS `.fontcolor("...")` calls; strip the call pattern only, never `#`-prefixed strings themselves — real song titles look like color codes (`#CMFLG`, `#The_Relentless`).
+- Chart inclusion: option bit `&4` = "in AC" (`get_sdata`'s `acin`); charts without it are omitted so the RPC marks them `in_ac=false`.
+- Full-line `//` comments in the JS files contain plausible-looking rows — strip them before parsing.
+
+textage is a single-maintainer hobby site — two file fetches per weekly run, nothing more aggressive.
 
 ### Google Sheets parser gotcha
 `app/difficulty_crawl/parsers/sheet_parser.py` finds the series-header row by matching `NNN譜面` (a **song count that changes over time**) with `SERIES_HEADER_RE`, never a hardcoded number. If you touch header detection, keep it pattern-based or a table will silently parse to empty.

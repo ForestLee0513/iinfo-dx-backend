@@ -84,16 +84,18 @@ begin
   from jsonb_array_elements(p_payload->'versions') as v
   on conflict (id) do update set name = excluded.name;
 
-  -- 2) 곡 upsert (textage_tag 기준, 크롤에 있으면 in_ac=true 복귀)
+  -- 2) 곡 upsert (textage_tag 기준). in_ac은 크롤러가 판별한 값을 사용
+  --    (actbl 상태플래그 bit0 — textage에서 tt2/firebrick로 표시되는 AC 삭제곡).
   insert into songs (textage_tag, title, genre, artist, version_id, in_ac)
-  select s->>'tag', s->>'title', s->>'genre', s->>'artist', (s->>'version')::int, true
+  select s->>'tag', s->>'title', s->>'genre', s->>'artist', (s->>'version')::int,
+         coalesce((s->>'in_ac')::boolean, true)
   from jsonb_array_elements(p_payload->'songs') as s
   on conflict (textage_tag) do update set
     title      = excluded.title,
     genre      = excluded.genre,
     artist     = excluded.artist,
     version_id = excluded.version_id,
-    in_ac      = true,
+    in_ac      = excluded.in_ac,
     updated_at = now();
 
   -- 3) 채보 upsert
