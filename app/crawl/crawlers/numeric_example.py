@@ -6,7 +6,7 @@
 import httpx
 
 from app.core.config import settings
-from app.crawlers.base import DEFAULT_HEADERS, TableDef, TableResult, register
+from app.crawl.crawlers.base import DEFAULT_HEADERS, TableDef, TableResult, register
 
 
 @register("numeric_json")

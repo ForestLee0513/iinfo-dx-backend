@@ -8,7 +8,7 @@ difficulty_tables / difficulty_entries는 public read(RLS) 대상이므로
 
 import logging
 
-from app.services.supabase_sync import get_supabase
+from app.common.supabase import get_supabase
 
 logger = logging.getLogger(__name__)
 

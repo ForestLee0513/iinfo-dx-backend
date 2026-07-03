@@ -16,29 +16,30 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 
 ```
 .
-├── app/
-│   ├── main.py              # FastAPI 앱 엔트리포인트 (lifespan에서 스케줄러 기동)
+├── app/                     # 모듈러 모놀리식 (단일 앱, 모듈별 라우터를 /api/v1/{모듈}로 마운트)
+│   ├── main.py              # FastAPI 엔트리포인트 (web/crawl/admin/health 마운트 + 스케줄러 기동)
 │   ├── core/
-│   │   └── config.py        # 환경설정 (.env 로드)
-│   ├── api/
-│   │   ├── deps.py          # 공통 의존성 (Supabase 토큰 검증)
-│   │   ├── router.py        # API 라우터 집합 (/api/v1) — 공개/인증필수 구분
+│   │   └── config.py        # 환경설정 (.env 로드) — 전역 공유
+│   ├── common/              # 모듈 공유 코드
+│   │   ├── auth.py          # Supabase 토큰 검증 의존성 (get_current_user/CurrentUser)
+│   │   ├── schemas.py       # 인증 사용자 스키마 (AuthUser)
+│   │   ├── supabase.py      # service role Supabase 클라이언트 (get_supabase)
+│   │   └── health.py        # 헬스체크 (공개)
+│   ├── web/                 # /web/*  : 사용자 client(별도 프론트 레포)용 API
+│   │   ├── router.py        # web 모듈 라우터
+│   │   ├── queries.py       # 난이도표 조회(읽기)
 │   │   └── endpoints/
-│   │       ├── health.py    # 헬스체크 (공개)
-│   │       ├── auth.py      # 내 정보 조회 (인증 필수)
-│   │       └── crawl.py     # 크롤링 수동 동기화/미리보기 (인증 필수)
-│   ├── crawlers/            # 크롤러 레지스트리
-│   │   ├── base.py          # TableDef/TableResult/레지스트리
-│   │   ├── sheet_5ch.py     # 5ch Google Sheets 크롤러 (GRADE)
-│   │   └── numeric_example.py # 숫자형 표 크롤러 템플릿 (NUMERIC)
-│   ├── parsers/
-│   │   └── sheet_parser.py  # pubhtml 파싱 (지력/개인차 판별)
-│   ├── services/
-│   │   ├── crawl_service.py # 크롤링 → 동기화 파이프라인 (run_full_sync)
-│   │   ├── supabase_sync.py # sync_table_result RPC 호출 (service role)
-│   │   └── scheduler.py     # APScheduler 주간 크론
-│   └── schemas/
-│       └── user.py          # 인증 사용자 스키마
+│   │       ├── tables.py    # 난이도표 목록/상세 (공개)
+│   │       └── me.py        # 내 정보 조회 (인증 필수)
+│   ├── crawl/               # /crawl/* : 크롤링 서비스
+│   │   ├── router.py        # targets/preview (공개)
+│   │   ├── pipeline.py      # 크롤링 → 동기화 파이프라인 (run_full_sync)
+│   │   ├── sync.py          # sync_table_result RPC 호출(쓰기, service role)
+│   │   ├── scheduler.py     # APScheduler 주간 크론
+│   │   ├── crawlers/        # 크롤러 레지스트리 (base/sheet_5ch/numeric_example)
+│   │   └── parsers/         # pubhtml 파싱 (지력/개인차 판별)
+│   └── admin/               # /admin/* : 어드민 API (자리표시자 — 미구현)
+│       └── router.py
 ├── supabase/
 │   └── migrations/          # Supabase 마이그레이션 SQL
 ├── requirements.txt
@@ -55,7 +56,7 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 ```
 [프론트엔드] --(구글 OAuth / 이메일 로그인)--> [Supabase Auth] --> access_token 발급
 [프론트엔드] --(Authorization: Bearer <access_token>)--> [이 백엔드]
-[백엔드] 토큰 서명·만료·발급자 검증 후 사용자 정보 추출 (app/api/deps.py)
+[백엔드] 토큰 서명·만료·발급자 검증 후 사용자 정보 추출 (app/common/auth.py)
 ```
 
 - 구글 로그인: `supabase.auth.signInWithOAuth({ provider: "google" })`
@@ -69,25 +70,21 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 | 신규 (비대칭 키, 권장) | `SUPABASE_JWT_SECRET` 비워둠 | JWKS 엔드포인트 공개 키 (RS256/ES256) |
 | 레거시 (대칭 키) | `SUPABASE_JWT_SECRET` 설정 | JWT Secret (HS256) |
 
-### 공개 API vs 인증 필수 API
+### 모듈 구성 & 인증
 
-`app/api/router.py`에서 라우터 단위로 구분합니다:
+단일 앱(모듈러 모놀리식)에 모듈별 라우터를 `/api/v1/{모듈}` 프리픽스로 마운트합니다 (`app/main.py`):
 
 ```python
-# 공개 API — dependencies 없이 등록
-api_router.include_router(health.router, prefix="/health", tags=["Health"])
-
-# 인증 필수 API — get_current_user를 dependencies에 추가하면 라우터 전체가 보호됨
-api_router.include_router(
-    example.router, prefix="/example", tags=["Example"],
-    dependencies=[Depends(get_current_user)],
-)
+app.include_router(health.router, prefix="/api/v1/health", tags=["Health"])
+app.include_router(web_router,    prefix="/api/v1/web",    tags=["Web"])
+app.include_router(crawl_router,  prefix="/api/v1/crawl",  tags=["Crawl"])
+app.include_router(admin_router,  prefix="/api/v1/admin",  tags=["Admin"])  # 자리표시자
 ```
 
-개별 엔드포인트에서 사용자 정보가 필요하면 `CurrentUser` 타입을 파라미터로 받습니다:
+인증이 필요한 엔드포인트는 `CurrentUser` 타입을 파라미터로 받습니다 (라우터 전체를 보호하려면 `dependencies=[Depends(get_current_user)]`):
 
 ```python
-from app.api.deps import CurrentUser
+from app.common.auth import CurrentUser
 
 @router.get("/me")
 def read_current_user(current_user: CurrentUser):
@@ -97,15 +94,16 @@ def read_current_user(current_user: CurrentUser):
 | 엔드포인트 | 인증 |
 |-----------|------|
 | `GET /api/v1/health` | 공개 |
-| `GET /api/v1/tables` | 공개 |
-| `GET /api/v1/tables/{slug}` | 공개 |
+| `GET /api/v1/web/tables` | 공개 |
+| `GET /api/v1/web/tables/{slug}` | 공개 |
+| `GET /api/v1/web/me` | 인증 필수 |
 | `GET /api/v1/crawl/targets` | 공개 |
-| `GET /api/v1/crawl/preview` | 공개 |
-| `GET /api/v1/auth/me` | 인증 필수 |
+| `POST /api/v1/crawl/preview` | 공개 |
+| `/api/v1/admin/*` | (미구현 — 별도 어드민 레포 예정) |
 
 ## 크롤링 & 주간 동기화
 
-난이도표를 크롤링해 Supabase에 반영하는 파이프라인입니다. 반영은 **주간 스케줄러로만** 이뤄지며 수동 트리거 엔드포인트는 없습니다(수동 갱신은 별도 레포에서 처리). 프론트엔드는 공개 `GET /api/v1/tables` 로 결과를 조회합니다.
+난이도표를 크롤링해 Supabase에 반영하는 파이프라인입니다. 반영은 **주간 스케줄러로만** 이뤄지며 수동 트리거 엔드포인트는 없습니다(수동 갱신은 별도 레포에서 처리). 프론트엔드는 공개 `GET /api/v1/web/tables` 로 결과를 조회합니다.
 
 ```
 [APScheduler 주 1회 크론] ──→ run_full_sync
@@ -150,10 +148,10 @@ CRAWL_SCHEDULE_MINUTE=0
 
 ```bash
 # 난이도표 목록 조회 (공개)
-curl http://localhost:8000/api/v1/tables
+curl http://localhost:8000/api/v1/web/tables
 
 # 표 1개 + 엔트리 조회 (공개)
-curl http://localhost:8000/api/v1/tables/5ch-sp12-strength
+curl http://localhost:8000/api/v1/web/tables/5ch-sp12-strength
 
 # 크롤러 목록 확인 (등록된 크롤러 이름)
 curl http://localhost:8000/api/v1/crawl/targets
@@ -167,7 +165,7 @@ curl -X POST http://localhost:8000/api/v1/crawl/preview \
 
 ### 새 난이도표 추가하기
 
-1. `app/crawlers/`에 크롤러 클래스를 구현하고 `@register("이름")`을 붙입니다 (숫자형 표는 `numeric_example.py` 템플릿의 `_parse`만 구현).
+1. `app/crawl/crawlers/`에 크롤러 클래스를 구현하고 `@register("이름")`을 붙입니다 (숫자형 표는 `numeric_example.py` 템플릿의 `_parse`만 구현).
 2. `.env`의 `CRAWL_TARGETS`에 `{"crawler": "이름", ...설정}`을 추가합니다.
 
 스키마/동기화 코드는 수정할 필요 없습니다.
@@ -262,6 +260,6 @@ Swagger UI에서 인증 필수 API를 테스트하려면 우측 상단 **Authori
 curl http://localhost:8000/api/v1/health
 
 # 내 정보 조회 (인증 필수 — 토큰 없으면 401)
-curl http://localhost:8000/api/v1/auth/me \
+curl http://localhost:8000/api/v1/web/me \
   -H "Authorization: Bearer <supabase-access-token>"
 ```

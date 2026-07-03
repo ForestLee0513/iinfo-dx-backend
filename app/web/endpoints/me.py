@@ -7,8 +7,8 @@
 
 from fastapi import APIRouter
 
-from app.api.deps import CurrentUser
-from app.schemas.user import AuthUser
+from app.common.auth import CurrentUser
+from app.common.schemas import AuthUser
 
 router = APIRouter()
 
