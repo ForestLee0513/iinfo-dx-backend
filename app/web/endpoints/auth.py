@@ -5,9 +5,9 @@
   쿠키로 왕복하므로 동시 로그인·다중 인스턴스에 안전하다.
   프로바이더 추가(애플 등)는 .env OAUTH_PROVIDERS에 이름만 추가
   (+ Supabase 대시보드에서 프로바이더 활성화·Redirect URL 등록).
-  콜백 완료 시 AUTH_SUCCESS_REDIRECT_URL(또는 /login의 ?next=, 허용 오리진만)
-  로 303 리다이렉트한다 — refresh 쿠키가 심어진 상태이므로 FE는 랜딩 후
-  POST /refresh로 access token을 받는다. 미설정이면 세션 JSON 반환(개발용).
+  콜백 완료 시 FE가 /login에 넘긴 ?next=(OAUTH_ALLOWED_REDIRECT_URLS의 오리진만,
+  아니면 홈)로 303 리다이렉트한다 — refresh 쿠키가 심어진 상태이므로 FE는
+  랜딩 후 POST /refresh로 access token을 받는다.
 - 이메일: POST /signup(가입), POST /login(비밀번호 로그인)
 - 세션: refresh token은 응답 본문에 넣지 않고 httpOnly 쿠키로만 발급한다 —
   FE(JS)는 access token만 메모리에 들고, 갱신은 POST /refresh(본문 없음,
@@ -141,35 +141,39 @@ def _issue_session(
     )
 
 
+def _redirect_home() -> str:
+    """로그인 후 돌아갈 기본 FE 홈 — 허용 목록의 첫 URL."""
+    urls = settings.OAUTH_ALLOWED_REDIRECT_URLS
+    return urls[0] if urls else "http://localhost:3000"
+
+
 def _allowed_redirect_origins() -> set[str]:
-    """콜백 후 리다이렉트를 허용할 오리진 — 기본 FE URL + CORS 허용 목록."""
-    origins = set(settings.CORS_ORIGINS)
-    if settings.AUTH_SUCCESS_REDIRECT_URL:
-        parts = urlsplit(settings.AUTH_SUCCESS_REDIRECT_URL)
+    """콜백 후 리다이렉트를 허용할 오리진 — OAUTH_ALLOWED_REDIRECT_URLS 기준."""
+    origins = set()
+    for url in settings.OAUTH_ALLOWED_REDIRECT_URLS:
+        parts = urlsplit(url)
         origins.add(f"{parts.scheme}://{parts.netloc}")
     return origins
 
 
-def _validate_next_url(next_url: str) -> str:
-    """open redirect 방지 — 허용 오리진의 http(s) URL만 통과시킨다."""
-    parts = urlsplit(next_url)
-    origin = f"{parts.scheme}://{parts.netloc}"
-    if parts.scheme not in ("http", "https") or origin not in _allowed_redirect_origins():
-        raise HTTPException(
-            status_code=400, detail=f"허용되지 않은 next URL: {next_url}"
-        )
-    return next_url
+def _sanitize_next_url(next_url: str | None) -> str:
+    """FE가 넘긴 next URL을 검증한다 — 허용 오리진의 http(s) URL만 통과시키고,
+    미지정·불일치 URL은 에러 대신 홈으로 폴백한다 (open redirect 방지)."""
+    if next_url:
+        parts = urlsplit(next_url)
+        origin = f"{parts.scheme}://{parts.netloc}"
+        if parts.scheme in ("http", "https") and origin in _allowed_redirect_origins():
+            return next_url
+    return _redirect_home()
 
 
-def _callback_failure(detail: str, status_code: int = 400) -> Response:
-    """콜백 실패 처리 — FE URL이 설정돼 있으면 ?error=로 돌려보내고, 아니면 HTTP 오류."""
-    target = settings.AUTH_SUCCESS_REDIRECT_URL
-    if target:
-        separator = "&" if urlsplit(target).query else "?"
-        return RedirectResponse(
-            f"{target}{separator}{urlencode({'error': detail})}", status_code=303
-        )
-    raise HTTPException(status_code=status_code, detail=detail)
+def _callback_failure(detail: str) -> Response:
+    """콜백 실패 처리 — 홈으로 ?error=를 붙여 돌려보낸다."""
+    target = _redirect_home()
+    separator = "&" if urlsplit(target).query else "?"
+    return RedirectResponse(
+        f"{target}{separator}{urlencode({'error': detail})}", status_code=303
+    )
 
 
 def _auth_error(e: auth_service.AuthServiceError, unauthorized: bool = False) -> HTTPException:
@@ -196,7 +200,7 @@ async def oauth_login(
     next_url: str | None = Query(
         None,
         alias="next",
-        description="로그인 완료 후 돌려보낼 FE URL (허용 오리진만, 미지정 시 AUTH_SUCCESS_REDIRECT_URL)",
+        description="로그인 완료 후 돌려보낼 FE URL (허용 오리진만, 미지정·불일치 시 홈으로 폴백)",
     ),
 ) -> RedirectResponse:
     """provider(google 등)의 OAuth 인증 페이지로 리다이렉트한다.
@@ -208,8 +212,7 @@ async def oauth_login(
         raise HTTPException(
             status_code=404, detail=f"지원하지 않는 프로바이더: {provider}"
         )
-    if next_url is not None:
-        next_url = _validate_next_url(next_url)
+    next_url = _sanitize_next_url(next_url)
 
     verifier, challenge = auth_service.generate_pkce()
     state = secrets.token_urlsafe(32)
@@ -242,19 +245,18 @@ async def oauth_login(
 @router.get(
     "/callback",
     summary="OAuth 콜백 — 인가 코드를 세션으로 교환",
-    response_model=AuthSessionResponse,
+    response_class=RedirectResponse,
     openapi_extra=PUBLIC,
 )
 async def oauth_callback(
     request: Request,
-    response: Response,
     code: str | None = Query(None, description="Supabase가 전달한 인가 코드"),
     error_description: str | None = Query(None),
 ):
     """OAuth 콜백. Redis의 PKCE verifier(1회용)로 인가 코드를 세션으로 교환한다.
 
-    AUTH_SUCCESS_REDIRECT_URL(또는 /login의 ?next=)이 있으면 refresh 쿠키를
-    심은 뒤 FE로 303 리다이렉트하고, 없으면 세션 JSON을 반환한다(개발용).
+    refresh 쿠키를 심은 뒤 /login의 ?next=(허용 오리진만, 아니면 홈)로
+    303 리다이렉트한다. 실패 시에도 홈으로 ?error=를 붙여 돌려보낸다.
     """
     if code is None:
         return _callback_failure(error_description or "인가 코드가 없습니다")
@@ -267,9 +269,7 @@ async def oauth_callback(
     try:
         payload = await get_redis().getdel(_PKCE_KEY.format(state=state))
     except RedisError:
-        return _callback_failure(
-            "Redis를 사용할 수 없어 로그인을 완료할 수 없습니다", status_code=503
-        )
+        return _callback_failure("Redis를 사용할 수 없어 로그인을 완료할 수 없습니다")
     if payload is None:
         return _callback_failure("로그인 시도가 만료됐습니다 — 다시 시작하세요")
     stored = json.loads(payload)
@@ -278,21 +278,15 @@ async def oauth_callback(
         data = await auth_service.exchange_pkce(code, stored["verifier"])
     except auth_service.AuthServiceError as e:
         error = _auth_error(e)
-        return _callback_failure(
-            f"OAuth 코드 교환 실패: {error.detail}", status_code=error.status_code
-        )
+        return _callback_failure(f"OAuth 코드 교환 실패: {error.detail}")
     if not data.get("refresh_token"):
-        return _callback_failure("Supabase 세션 응답이 올바르지 않습니다", status_code=502)
+        return _callback_failure("Supabase 세션 응답이 올바르지 않습니다")
 
-    target = stored.get("next") or settings.AUTH_SUCCESS_REDIRECT_URL
-    if target:
-        redirect = RedirectResponse(target, status_code=303)
-        redirect.delete_cookie(_STATE_COOKIE)
-        _set_refresh_cookie(redirect, request, data["refresh_token"])
-        return redirect
-
-    response.delete_cookie(_STATE_COOKIE)
-    return _issue_session(data, request, response)
+    target = stored.get("next") or _redirect_home()
+    redirect = RedirectResponse(target, status_code=303)
+    redirect.delete_cookie(_STATE_COOKIE)
+    _set_refresh_cookie(redirect, request, data["refresh_token"])
+    return redirect
 
 
 # ---------- 이메일 로그인/가입 ----------
