@@ -110,6 +110,7 @@ class PreviewEntry(BaseModel):
     level: int | None = None
     grade: str | None = None
     rating: float | None = None
+    table_type: str | None = None  # 'STRENGTH'=지력 / 'PERSONAL'=개인차 (5ch)
 
 
 class PreviewTable(BaseModel):

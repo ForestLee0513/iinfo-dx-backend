@@ -38,6 +38,7 @@ class DifficultyEntry(BaseModel):
     level: int | None = None
     grade: str | None = None  # GRADE 방식: 'S+', 'A' 등
     rating: float | None = None  # NUMERIC 방식: 12.3 등
+    table_type: str | None = None  # 'STRENGTH'=지력 / 'PERSONAL'=개인차 (5ch)
     created_at: datetime
 
 
