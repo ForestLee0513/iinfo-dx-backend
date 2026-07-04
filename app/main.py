@@ -4,16 +4,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.admin import jobs as admin_jobs
-from app.admin.router import router as admin_router
-from app.common import health
-from app.common.openapi import setup_docs
-from app.common.redis import close_redis
+from app.api.v1.api import api_router
 from app.core.config import settings
-from app.difficulty_crawl import scheduler
-from app.difficulty_crawl.router import router as difficulty_crawl_router
-from app.songs_crawl.router import router as songs_crawl_router
-from app.web.router import router as web_router
+from app.core.openapi import setup_docs
+from app.db.redis import close_redis
+from app.services.admin import jobs as admin_jobs
+from app.services.difficulty_crawl import scheduler
 
 logging.basicConfig(level=logging.INFO)
 
@@ -49,13 +45,8 @@ if settings.CORS_ORIGINS:
         allow_headers=["*"],
     )
 
-# ── 모듈러 모놀리식: 단일 앱에 모듈별 라우터를 네임스페이스로 마운트 ──
-API_PREFIX = "/api/v1"
-app.include_router(health.router, prefix=f"{API_PREFIX}/health", tags=["Health"])
-app.include_router(web_router, prefix=f"{API_PREFIX}/web", tags=["Web"])
-app.include_router(songs_crawl_router, prefix=f"{API_PREFIX}/songs-crawl", tags=["SongsCrawl"])
-app.include_router(difficulty_crawl_router, prefix=f"{API_PREFIX}/difficulty-crawl", tags=["DifficultyCrawl"])
-app.include_router(admin_router, prefix=f"{API_PREFIX}/admin", tags=["Admin"])
+# 모든 v1 라우터를 /api/v1 아래로 마운트 (app/api/v1/api.py에서 취합)
+app.include_router(api_router, prefix="/api/v1")
 
 # 공개(/docs — PUBLIC 마커 엔드포인트만) / 비공개(/internal/docs — 전체) 문서.
 # 모든 include_router 뒤에 호출해야 스펙에 전 라우트가 잡힌다.

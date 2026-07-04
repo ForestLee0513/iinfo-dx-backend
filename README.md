@@ -68,7 +68,7 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 ```
 [프론트엔드] --(구글 OAuth / 이메일 로그인)--> [Supabase Auth] --> access_token 발급
 [프론트엔드] --(Authorization: Bearer <access_token>)--> [이 백엔드]
-[백엔드] 토큰 서명·만료·발급자 검증 후 사용자 정보 추출 (app/common/auth.py)
+[백엔드] 토큰 서명·만료·발급자 검증 후 사용자 정보 추출 (app/core/security.py, app/api/deps.py)
 ```
 
 - 구글 로그인: `supabase.auth.signInWithOAuth({ provider: "google" })`
@@ -97,7 +97,7 @@ app.include_router(admin_router,            prefix="/api/v1/admin",            t
 인증이 필요한 엔드포인트는 `CurrentUser` 타입을 파라미터로 받습니다 (라우터 전체를 보호하려면 `dependencies=[Depends(get_current_user)]`):
 
 ```python
-from app.common.auth import CurrentUser
+from app.api.deps import CurrentUser
 
 @router.get("/me")
 def read_current_user(current_user: CurrentUser):
@@ -198,7 +198,7 @@ set raw_app_meta_data = raw_app_meta_data - 'role'
 where email = 'admin@example.com';
 ```
 
-역할은 JWT 클레임으로 실려 오므로 **변경은 다음 토큰 갱신(재로그인 또는 만료 후 refresh) 시점부터** 반영됩니다. 역할 체계는 `app/common/schemas.py`의 `UserRole`/`ROLE_LEVELS`(서열 기반 — 상위 역할이 하위 권한 포함)에 정의되어 있어, 역할이 늘어나면 여기에만 추가하면 됩니다. 엔드포인트 보호는 `require_role(UserRole.ADMIN)` 의존성을 사용합니다.
+역할은 JWT 클레임으로 실려 오므로 **변경은 다음 토큰 갱신(재로그인 또는 만료 후 refresh) 시점부터** 반영됩니다. 역할 체계는 `app/schemas/user.py`의 `UserRole`/`ROLE_LEVELS`(서열 기반 — 상위 역할이 하위 권한 포함)에 정의되어 있어, 역할이 늘어나면 여기에만 추가하면 됩니다. 엔드포인트 보호는 `require_role(UserRole.ADMIN)` 의존성을 사용합니다.
 
 ```bash
 TOKEN="<supabase-access-token>"
@@ -249,10 +249,10 @@ curl "http://localhost:8000/api/v1/songs-crawl/preview?title=AA&limit=5"
 
 ### 새 난이도표 추가하기
 
-1. `app/difficulty_crawl/crawlers/`에 크롤러 클래스를 구현하고 `@register("이름")`을 붙입니다 (숫자형 표는 `numeric_example.py` 템플릿의 `_parse`만 구현).
+1. `app/services/difficulty_crawl/crawlers/`에 크롤러 클래스를 구현하고 `@register("이름")`을 붙입니다 (숫자형 표는 `numeric_example.py` 템플릿의 `_parse`만 구현).
 2. `.env`의 `TABLE_CRAWL_TARGETS`에 `{"crawler": "이름", ...설정}`을 추가합니다.
 
-스키마/동기화 코드는 수정할 필요 없습니다. 곡 마스터 소스를 추가할 때도 동일한 패턴으로 `app/songs_crawl/crawlers/` + `SONG_CRAWL_TARGETS`만 수정합니다 (두 모듈은 레지스트리가 분리되어 있습니다).
+스키마/동기화 코드는 수정할 필요 없습니다. 곡 마스터 소스를 추가할 때도 동일한 패턴으로 `app/services/songs_crawl/crawlers/` + `SONG_CRAWL_TARGETS`만 수정합니다 (두 모듈은 레지스트리가 분리되어 있습니다).
 
 ## 사전 준비
 
@@ -340,7 +340,7 @@ Swagger UI에서 인증 필수 API를 테스트하려면 우측 상단 **Authori
 
 ### OpenAPI 문서 분리 (공개 / 비공개)
 
-- **공개 문서(`/docs`, `/openapi.json`)** 에는 엔드포인트에 `openapi_extra=PUBLIC`(`app/common/openapi.py`)을 붙인 것만 실립니다 — **opt-in 방식**이라 새 엔드포인트는 기본적으로 클라이언트 스펙에 노출되지 않습니다. 현재 공개: `GET /web/tables`, `GET /web/tables/{slug}`, `GET /web/me`.
+- **공개 문서(`/docs`, `/openapi.json`)** 에는 엔드포인트에 `openapi_extra=PUBLIC`(`app/core/openapi.py`)을 붙인 것만 실립니다 — **opt-in 방식**이라 새 엔드포인트는 기본적으로 클라이언트 스펙에 노출되지 않습니다. 현재 공개: `GET /web/tables`, `GET /web/tables/{slug}`, `GET /web/me`.
 - **비공개 문서(`/internal/docs`)** 에는 어드민·크롤 진단을 포함한 전체 엔드포인트가 실립니다.
 - 이 분리는 **문서 노출 제어일 뿐 접근 제어가 아닙니다**. 실제 차단은 인증(ADMIN 역할)과 리버스 프록시에서 처리하며, 공개 도메인 쪽 프록시(NPM)에서 `/internal` 경로를 차단해야 합니다 (`/api/v1/admin`, `/api/v1/*-crawl`과 동일하게).
 
