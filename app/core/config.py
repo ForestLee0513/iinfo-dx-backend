@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = []
 
     # 어드민 권한은 env가 아니라 Supabase 계정의 app_metadata.role로 판정한다
-    # (app/common/schemas.py UserRole). 구 ADMIN_EMAILS 등 잔여 env 키는 무시(extra="ignore").
+    # (app/schemas/user.py UserRole). 구 ADMIN_EMAILS 등 잔여 env 키는 무시(extra="ignore").
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
