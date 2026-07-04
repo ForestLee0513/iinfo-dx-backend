@@ -13,7 +13,9 @@ GRADES_5CH = ["F", "E", "D", "C", "B", "A", "S", "S+"]
 class Sheet5chCrawler:
     """
     Google Sheets pubhtml 기반 5ch 표.
-    시트 하나에서 지력표(STRENGTH)/개인차표(PERSONAL) 두 표가 나옴.
+    시트 하나에서 지력/개인차 곡이 섞여 나오지만, 표를 나누지 않고
+    하나의 표(TableResult)로 합친다. 각 곡 엔트리의 table_type으로
+    지력(STRENGTH)/개인차(PERSONAL)를 구분한다.
 
     target 예시:
       {"crawler": "5ch_sheet",
@@ -31,33 +33,27 @@ class Sheet5chCrawler:
             follow_redirects=True,
         )
         resp.raise_for_status()
-        parsed = parse_sheet(resp.text, level)  # {grade_key: {strength: [], personal: []}}
+        # {grade: [ {title, series, difficulty, level, grade, table_type}, ... ]}
+        parsed = parse_sheet(resp.text, level)
 
-        results = {
-            "strength": TableResult(TableDef(
-                slug=f"5ch-{style.lower()}{level}-strength",
-                name=f"5ch {style}☆{level} 지력표",
-                source="5ch", play_style=style, level=level,
-                rating_type="GRADE", grades=GRADES_5CH,
-            )),
-            "personal": TableResult(TableDef(
-                slug=f"5ch-{style.lower()}{level}-personal",
-                name=f"5ch {style}☆{level} 개인차표",
-                source="5ch", play_style=style, level=level,
-                rating_type="GRADE", grades=GRADES_5CH,
-            )),
-        }
+        result = TableResult(TableDef(
+            slug=f"5ch-{style.lower()}{level}",
+            name=f"5ch {style}☆{level}",
+            source="5ch", play_style=style, level=level,
+            rating_type="GRADE", grades=GRADES_5CH,
+        ))
 
-        for groups in parsed.values():
-            for ttype in ("strength", "personal"):
-                for item in groups.get(ttype, []):
-                    results[ttype].entries.append({
-                        "title": item["title"],
-                        "series": item.get("series"),
-                        "play_style": style,
-                        "difficulty": item["difficulty"]["in_game"],
-                        "level": item["level"],
-                        "grade": item["difficulty"]["table"],
-                    })
+        # 티어(등급) 순서대로 순회하며 하나의 엔트리 목록으로 합침
+        for grade in GRADES_5CH:
+            for item in parsed.get(grade, []):
+                result.entries.append({
+                    "title": item["title"],
+                    "series": item.get("series"),
+                    "play_style": style,
+                    "difficulty": item["difficulty"],
+                    "level": item["level"],
+                    "grade": item["grade"],
+                    "table_type": item["table_type"],
+                })
 
-        return list(results.values())
+        return [result]

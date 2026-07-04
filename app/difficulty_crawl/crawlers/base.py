@@ -49,6 +49,9 @@ class TableResult:
     entries 항목 형식 (sync_table_result RPC 입력과 동일):
       GRADE  : {"title","series","play_style","difficulty","level","grade"}
       NUMERIC: {"title","series","play_style","difficulty","level","rating"}
+    선택 필드:
+      table_type: "STRENGTH"(지력)/"PERSONAL"(개인차) — 5ch처럼 한 표에
+                  지력/개인차 곡이 섞이는 경우에만 채움 (없으면 null).
     """
 
     table: TableDef

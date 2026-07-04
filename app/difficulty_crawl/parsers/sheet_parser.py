@@ -141,12 +141,17 @@ def parse_title_diff(text: str) -> tuple[str, str]:
     return text.strip(), "ANOTHER"
 
 
-def parse_sheet(html: str, level: int) -> dict[str, dict[str, list]]:
+def parse_sheet(html: str, level: int) -> dict[str, list]:
     """
-    HTML을 파싱해 아래 구조로 반환:
+    HTML을 파싱해 티어(등급)별 곡 리스트로 반환.
+    지력표/개인차표를 나누지 않고 하나로 합치되, 각 곡 엔트리에
+    table_type("STRENGTH"=지력 / "PERSONAL"=개인차)을 담아 구분한다.
+
+    반환 구조:
     {
-      "s_plus": { "strength": [...], "personal": [...] },
-      "s":      { ... },
+      "S+": [ {title, series, difficulty, level, grade, table_type}, ... ],
+      "S":  [ ... ],
+      "A":  [ ... ],
       ...
     }
 
@@ -190,8 +195,8 @@ def parse_sheet(html: str, level: int) -> dict[str, dict[str, list]]:
         logger.warning("시리즈 헤더행을 찾지 못했습니다.")
         return {}
 
-    # ── 데이터행 파싱
-    result: dict[str, dict[str, list]] = {}
+    # ── 데이터행 파싱 (티어별 단일 리스트)
+    result: dict[str, list] = {}
 
     for row in data_rows:
         tds = row.find_all("td")
@@ -204,9 +209,8 @@ def parse_sheet(html: str, level: int) -> dict[str, dict[str, list]]:
         if not grade or grade in SKIP_TEXTS or SERIES_HEADER_RE.match(grade):
             continue
 
-        gkey = grade.lower().replace("+", "_plus")
-        if gkey not in result:
-            result[gkey] = {"strength": [], "personal": []}
+        if grade not in result:
+            result[grade] = []
 
         # x=1~: 곡명 셀
         for x, td in enumerate(tds[1:], start=1):
@@ -219,17 +223,15 @@ def parse_sheet(html: str, level: int) -> dict[str, dict[str, list]]:
                 if not title:
                     continue
 
+                # is_red(빨간 글씨) → 개인차, 아니면 지력
                 table_type = "PERSONAL" if is_red else "STRENGTH"
-                entry = {
+                result[grade].append({
                     "title": title,
-                    "difficulty": {
-                        "in_game": diff,
-                        "table": grade,
-                        "table_type": table_type,
-                    },
                     "series": series,
+                    "difficulty": diff,
                     "level": level,
-                }
-                result[gkey][table_type.lower()].append(entry)
+                    "grade": grade,
+                    "table_type": table_type,
+                })
 
     return result
