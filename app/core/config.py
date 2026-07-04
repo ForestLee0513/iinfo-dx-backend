@@ -24,11 +24,11 @@ class Settings(BaseSettings):
     # 콜백 URL(Redirect URLs) 등록이 선행돼야 한다.
     OAUTH_PROVIDERS: list[str] = ["google"]
 
-    # OAuth 로그인 완료 후 브라우저를 돌려보낼 FE URL.
-    # 설정하면 /auth/callback이 JSON 대신 이 주소로 303 리다이렉트한다
-    # (FE는 랜딩 후 POST /auth/refresh로 access token을 받는다).
-    # 비워두면 콜백이 세션 JSON을 그대로 반환한다 (개발용).
-    AUTH_SUCCESS_REDIRECT_URL: str = ""
+    # OAuth 로그인 완료 후 브라우저를 돌려보낼 FE URL은 .env가 아니라 FE가
+    # /auth/login/{provider}?next= 로 넘긴다. 이 허용 목록의 오리진과 일치하는
+    # next만 사용하고, 그 외(미지정·불일치)에는 목록의 첫 URL(홈)으로 돌려보낸다
+    # (open redirect 방지). 지금은 로컬 FE만 허용 — 운영 도메인은 여기에 추가한다.
+    OAUTH_ALLOWED_REDIRECT_URLS: list[str] = ["http://localhost:3000"]
 
     # 인증 쿠키(refresh token 등) SameSite 정책.
     # FE가 API와 다른 사이트(등록 도메인 자체가 다름)에서 붙으면 "none"으로
