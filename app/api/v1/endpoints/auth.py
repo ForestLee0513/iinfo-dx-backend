@@ -5,7 +5,7 @@
   쿠키로 왕복하므로 동시 로그인·다중 인스턴스에 안전하다.
   프로바이더 추가(애플 등)는 .env OAUTH_PROVIDERS에 이름만 추가
   (+ Supabase 대시보드에서 프로바이더 활성화·Redirect URL 등록).
-  콜백 완료 시 FE가 /login에 넘긴 ?next=(OAUTH_ALLOWED_REDIRECT_URLS의 오리진만,
+  콜백 완료 시 FE가 /login에 넘긴 ?redirect=(OAUTH_ALLOWED_REDIRECT_URLS의 오리진만,
   아니면 홈)로 303 리다이렉트한다 — refresh 쿠키가 심어진 상태이므로 FE는
   랜딩 후 POST /refresh로 access token을 받는다.
 - 이메일: POST /signup(가입), POST /login(비밀번호 로그인)
@@ -157,14 +157,14 @@ def _allowed_redirect_origins() -> set[str]:
     return origins
 
 
-def _sanitize_next_url(next_url: str | None) -> str:
-    """FE가 넘긴 next URL을 검증한다 — 허용 오리진의 http(s) URL만 통과시키고,
+def _sanitize_redirect_url(redirect_url: str | None) -> str:
+    """FE가 넘긴 redirect URL을 검증한다 — 허용 오리진의 http(s) URL만 통과시키고,
     미지정·불일치 URL은 에러 대신 홈으로 폴백한다 (open redirect 방지)."""
-    if next_url:
-        parts = urlsplit(next_url)
+    if redirect_url:
+        parts = urlsplit(redirect_url)
         origin = f"{parts.scheme}://{parts.netloc}"
         if parts.scheme in ("http", "https") and origin in _allowed_redirect_origins():
-            return next_url
+            return redirect_url
     return _redirect_home()
 
 
@@ -198,29 +198,29 @@ def _auth_error(e: auth_service.AuthServiceError, unauthorized: bool = False) ->
 async def oauth_login(
     provider: str,
     request: Request,
-    next_url: str | None = Query(
+    redirect_url: str | None = Query(
         None,
-        alias="next",
+        alias="redirect",
         description="로그인 완료 후 돌려보낼 FE URL (허용 오리진만, 미지정·불일치 시 홈으로 폴백)",
     ),
 ) -> RedirectResponse:
     """provider(google 등)의 OAuth 인증 페이지로 리다이렉트한다.
 
-    PKCE verifier(+ next URL)를 Redis에 저장하고 조회 키(state)를
+    PKCE verifier(+ redirect URL)를 Redis에 저장하고 조회 키(state)를
     httpOnly 쿠키로 내려준다.
     """
     if provider not in settings.OAUTH_PROVIDERS:
         raise HTTPException(
             status_code=404, detail=f"지원하지 않는 프로바이더: {provider}"
         )
-    next_url = _sanitize_next_url(next_url)
+    redirect_url = _sanitize_redirect_url(redirect_url)
 
     verifier, challenge = auth_service.generate_pkce()
     state = secrets.token_urlsafe(32)
     try:
         await get_redis().set(
             _PKCE_KEY.format(state=state),
-            json.dumps({"verifier": verifier, "next": next_url}),
+            json.dumps({"verifier": verifier, "redirect": redirect_url}),
             ex=_PKCE_TTL_SECONDS,
         )
     except RedisError:
@@ -256,7 +256,7 @@ async def oauth_callback(
 ):
     """OAuth 콜백. Redis의 PKCE verifier(1회용)로 인가 코드를 세션으로 교환한다.
 
-    refresh 쿠키를 심은 뒤 /login의 ?next=(허용 오리진만, 아니면 홈)로
+    refresh 쿠키를 심은 뒤 /login의 ?redirect=(허용 오리진만, 아니면 홈)로
     303 리다이렉트한다. 실패 시에도 홈으로 ?error=를 붙여 돌려보낸다.
     """
     if code is None:
@@ -283,7 +283,7 @@ async def oauth_callback(
     if not data.get("refresh_token"):
         return _callback_failure("Supabase 세션 응답이 올바르지 않습니다")
 
-    target = stored.get("next") or _redirect_home()
+    target = stored.get("redirect") or _redirect_home()
     redirect = RedirectResponse(target, status_code=303)
     redirect.delete_cookie(_STATE_COOKIE)
     _set_refresh_cookie(redirect, request, data["refresh_token"])
