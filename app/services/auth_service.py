@@ -36,7 +36,7 @@ def generate_pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-def build_authorize_url(provider: str, redirect_to: str, code_challenge: str) -> str:
+def build_authorize_url(provider: str, redirect_to: str, code_challenge: str, prompt: str = "") -> str:
     """GoTrue authorize URL — 브라우저를 여기로 보내면 provider 로그인이 시작된다.
 
     provider는 파라미터일 뿐이라 애플 등 추가 시 이 코드는 그대로다
@@ -48,6 +48,7 @@ def build_authorize_url(provider: str, redirect_to: str, code_challenge: str) ->
             "redirect_to": redirect_to,
             "code_challenge": code_challenge,
             "code_challenge_method": "s256",
+            "prompt": prompt
         }
     )
     return f"{settings.SUPABASE_URL}/auth/v1/authorize?{query}"

@@ -203,6 +203,7 @@ async def oauth_login(
         alias="redirect",
         description="로그인 완료 후 돌려보낼 FE URL (허용 오리진만, 미지정·불일치 시 홈으로 폴백)",
     ),
+    prompt: str = ""
 ) -> RedirectResponse:
     """provider(google 등)의 OAuth 인증 페이지로 리다이렉트한다.
 
@@ -229,7 +230,7 @@ async def oauth_login(
         )
 
     authorize_url = auth_service.build_authorize_url(
-        provider, str(request.url_for("oauth_callback")), challenge
+        provider, str(request.url_for("oauth_callback")), challenge, prompt
     )
     response = RedirectResponse(authorize_url)
     response.set_cookie(
