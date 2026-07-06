@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     OAUTH_PROVIDERS: list[str] = ["google"]
 
     # OAuth 로그인 완료 후 브라우저를 돌려보낼 FE URL은 .env가 아니라 FE가
-    # /auth/login/{provider}?next= 로 넘긴다. 이 허용 목록의 오리진과 일치하는
-    # next만 사용하고, 그 외(미지정·불일치)에는 목록의 첫 URL(홈)으로 돌려보낸다
+    # /auth/login/{provider}?redirect= 로 넘긴다. 이 허용 목록의 오리진과 일치하는
+    # redirect만 사용하고, 그 외(미지정·불일치)에는 목록의 첫 URL(홈)으로 돌려보낸다
     # (open redirect 방지). 지금은 로컬 FE만 허용 — 운영 도메인은 여기에 추가한다.
     OAUTH_ALLOWED_REDIRECT_URLS: list[str] = ["http://localhost:3000"]
 
