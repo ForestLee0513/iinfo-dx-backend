@@ -13,177 +13,38 @@
   FE(JS)는 access token만 메모리에 들고, 갱신은 POST /refresh(본문 없음,
   쿠키 자동 전송)로 처리한다. 별도 오리진 FE는 fetch에 credentials:"include"
   필요(CORS allow_credentials는 main.py에서 이미 켜져 있다).
+
+쿠키/세션/PKCE/리다이렉트 공통 로직은 auth_common에 있다. 이 라우터는 사용자
+클라이언트(web)용이며 어드민 전용 로그인은 endpoints/admin_auth.py에 있다.
 """
 
 import json
 import secrets
 from typing import Annotated
-from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel
 from redis.exceptions import RedisError
 
 from app.api.deps import CurrentUser
-from app.core.security import bearer_scheme, extract_app_role
+from app.api.v1.endpoints import auth_common as ac
+from app.core.security import bearer_scheme
 from app.core.openapi import PUBLIC
 from app.db.redis import get_redis
-from app.schemas.user import AuthUser
+from app.schemas.user import AuthUser, UserRole
 from app.core.config import settings
 from app.services import auth_service
 
 router = APIRouter()
 
-_STATE_COOKIE = "oauth_state"
-_PKCE_KEY = "auth:pkce:{state}"
-_PKCE_TTL_SECONDS = 300
-
-_REFRESH_COOKIE = "refresh_token"
-# Supabase refresh token은 시간 만료가 아니라 rotation 기반 — 쿠키 수명만 제한한다
-_REFRESH_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30일
-
-
-# ---------- 요청/응답 스키마 ----------
-
-
-class SessionData(BaseModel):
-    """Supabase 세션 — refresh token은 본문이 아니라 httpOnly 쿠키로 전달된다."""
-
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int | None = None
-
-
-class AuthSessionResponse(BaseModel):
-    """로그인/토큰 갱신 성공 응답."""
-
-    session: SessionData
-    user: AuthUser
-
-
-class SignupResponse(BaseModel):
-    """회원가입 응답 — Supabase 이메일 확인이 켜져 있으면 session이 없다."""
-
-    email_confirmation_required: bool
-    session: SessionData | None = None
-    user: AuthUser | None = None
-
-
-class EmailCredentials(BaseModel):
-    email: str
-    password: str
-
-
-# ---------- 내부 헬퍼 ----------
-
-
-def _to_auth_user(user: dict | None) -> AuthUser | None:
-    """GoTrue user 객체 → AuthUser (app_metadata.role 기반 권한 포함)."""
-    if not user or not user.get("id"):
-        return None
-    app_metadata = user.get("app_metadata") or {}
-    return AuthUser(
-        id=str(user["id"]),
-        email=user.get("email"),
-        provider=app_metadata.get("provider"),
-        app_role=extract_app_role(app_metadata),
-    )
-
-
-def _cookie_secure() -> bool:
-    # SameSite=None은 Secure가 필수. 그 외에는 로컬 개발(http)만 예외.
-    return (
-        settings.AUTH_COOKIE_SAMESITE.lower() == "none"
-        or settings.ENVIRONMENT != "local"
-    )
-
-
-def _refresh_cookie_path(request: Request) -> str:
-    """refresh 쿠키를 인증 라우터(/…/auth) 경로에만 전송되도록 제한한다."""
-    return str(request.url_for("refresh_session").path).rsplit("/", 1)[0]
-
-
-def _set_refresh_cookie(response: Response, request: Request, token: str) -> None:
-    response.set_cookie(
-        _REFRESH_COOKIE,
-        token,
-        max_age=_REFRESH_COOKIE_MAX_AGE,
-        path=_refresh_cookie_path(request),
-        httponly=True,
-        samesite=settings.AUTH_COOKIE_SAMESITE,
-        secure=_cookie_secure(),
-    )
-
-
-def _delete_refresh_cookie(response: Response, request: Request) -> None:
-    response.delete_cookie(_REFRESH_COOKIE, path=_refresh_cookie_path(request))
-
-
-def _issue_session(
-    data: dict, request: Request, response: Response
-) -> AuthSessionResponse:
-    """GoTrue 토큰 응답 → refresh 쿠키 발급 + 본문(access token만) 구성."""
-    user = _to_auth_user(data.get("user"))
-    if not data.get("access_token") or not data.get("refresh_token") or user is None:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Supabase 세션 응답이 올바르지 않습니다",
-        )
-    _set_refresh_cookie(response, request, data["refresh_token"])
-    return AuthSessionResponse(
-        session=SessionData(
-            access_token=data["access_token"],
-            token_type=data.get("token_type", "bearer"),
-            expires_in=data.get("expires_in"),
-        ),
-        user=user,
-    )
-
-
-def _redirect_home() -> str:
-    """로그인 후 돌아갈 기본 FE 홈 — 허용 목록의 첫 URL."""
-    urls = settings.OAUTH_ALLOWED_REDIRECT_URLS
-    return urls[0] if urls else "http://localhost:3000"
-
-
-def _allowed_redirect_origins() -> set[str]:
-    """콜백 후 리다이렉트를 허용할 오리진 — OAUTH_ALLOWED_REDIRECT_URLS 기준."""
-    origins = set()
-    for url in settings.OAUTH_ALLOWED_REDIRECT_URLS:
-        parts = urlsplit(url)
-        origins.add(f"{parts.scheme}://{parts.netloc}")
-    return origins
-
-
-def _sanitize_redirect_url(redirect_url: str | None) -> str:
-    """FE가 넘긴 redirect URL을 검증한다 — 허용 오리진의 http(s) URL만 통과시키고,
-    미지정·불일치 URL은 에러 대신 홈으로 폴백한다 (open redirect 방지)."""
-    if redirect_url:
-        parts = urlsplit(redirect_url)
-        origin = f"{parts.scheme}://{parts.netloc}"
-        if parts.scheme in ("http", "https") and origin in _allowed_redirect_origins():
-            return redirect_url
-    return _redirect_home()
-
-
-def _callback_failure(detail: str) -> Response:
-    """콜백 실패 처리 — 홈으로 ?error=를 붙여 돌려보낸다."""
-    target = _redirect_home()
-    separator = "&" if urlsplit(target).query else "?"
-    return RedirectResponse(
-        f"{target}{separator}{urlencode({'error': detail})}", status_code=303
-    )
-
-
-def _auth_error(e: auth_service.AuthServiceError, unauthorized: bool = False) -> HTTPException:
-    """GoTrue 오류 → HTTP 응답. 5xx는 502로, 인증 실패 계열은 401로 변환."""
-    if e.status_code >= 500:
-        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=e.message)
-    if unauthorized and e.status_code in (400, 401, 403):
-        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=e.message)
-    return HTTPException(status_code=e.status_code, detail=e.message)
+# 사용자 클라이언트(web) 로그인 컨텍스트 — 최소 역할 USER, web 리다이렉트 정책
+_CTX = ac.AuthContext(
+    required_role=UserRole.USER,
+    redirect_urls=settings.OAUTH_ALLOWED_REDIRECT_URLS,
+    refresh_route_name="refresh_session",
+    pkce_key="auth:pkce:{state}",
+)
 
 
 # ---------- OAuth (구글 등 — OAUTH_PROVIDERS로 확장) ----------
@@ -203,7 +64,7 @@ async def oauth_login(
         alias="redirect",
         description="로그인 완료 후 돌려보낼 FE URL (허용 오리진만, 미지정·불일치 시 홈으로 폴백)",
     ),
-    prompt: str = ""
+    prompt: str = "",
 ) -> RedirectResponse:
     """provider(google 등)의 OAuth 인증 페이지로 리다이렉트한다.
 
@@ -214,15 +75,15 @@ async def oauth_login(
         raise HTTPException(
             status_code=404, detail=f"지원하지 않는 프로바이더: {provider}"
         )
-    redirect_url = _sanitize_redirect_url(redirect_url)
+    redirect_url = ac.sanitize_redirect_url(redirect_url, _CTX)
 
     verifier, challenge = auth_service.generate_pkce()
     state = secrets.token_urlsafe(32)
     try:
         await get_redis().set(
-            _PKCE_KEY.format(state=state),
+            _CTX.pkce_key.format(state=state),
             json.dumps({"verifier": verifier, "redirect": redirect_url}),
-            ex=_PKCE_TTL_SECONDS,
+            ex=ac.PKCE_TTL_SECONDS,
         )
     except RedisError:
         raise HTTPException(
@@ -233,14 +94,7 @@ async def oauth_login(
         provider, str(request.url_for("oauth_callback")), challenge, prompt
     )
     response = RedirectResponse(authorize_url)
-    response.set_cookie(
-        _STATE_COOKIE,
-        state,
-        max_age=_PKCE_TTL_SECONDS,
-        httponly=True,
-        samesite=settings.AUTH_COOKIE_SAMESITE,
-        secure=_cookie_secure(),
-    )
+    ac.set_state_cookie(response, state)
     return response
 
 
@@ -261,33 +115,35 @@ async def oauth_callback(
     303 리다이렉트한다. 실패 시에도 홈으로 ?error=를 붙여 돌려보낸다.
     """
     if code is None:
-        return _callback_failure(error_description or "인가 코드가 없습니다")
+        return ac.callback_failure(error_description or "인가 코드가 없습니다", _CTX)
 
-    state = request.cookies.get(_STATE_COOKIE)
+    state = request.cookies.get(ac.STATE_COOKIE)
     if state is None:
-        return _callback_failure(
-            "로그인 상태 쿠키가 없습니다 — /login/{provider}부터 다시 시작하세요"
+        return ac.callback_failure(
+            "로그인 상태 쿠키가 없습니다 — /login/{provider}부터 다시 시작하세요", _CTX
         )
     try:
-        payload = await get_redis().getdel(_PKCE_KEY.format(state=state))
+        payload = await get_redis().getdel(_CTX.pkce_key.format(state=state))
     except RedisError:
-        return _callback_failure("Redis를 사용할 수 없어 로그인을 완료할 수 없습니다")
+        return ac.callback_failure(
+            "Redis를 사용할 수 없어 로그인을 완료할 수 없습니다", _CTX
+        )
     if payload is None:
-        return _callback_failure("로그인 시도가 만료됐습니다 — 다시 시작하세요")
+        return ac.callback_failure("로그인 시도가 만료됐습니다 — 다시 시작하세요", _CTX)
     stored = json.loads(payload)
 
     try:
         data = await auth_service.exchange_pkce(code, stored["verifier"])
     except auth_service.AuthServiceError as e:
-        error = _auth_error(e)
-        return _callback_failure(f"OAuth 코드 교환 실패: {error.detail}")
+        error = ac.auth_error(e)
+        return ac.callback_failure(f"OAuth 코드 교환 실패: {error.detail}", _CTX)
     if not data.get("refresh_token"):
-        return _callback_failure("Supabase 세션 응답이 올바르지 않습니다")
+        return ac.callback_failure("Supabase 세션 응답이 올바르지 않습니다", _CTX)
 
-    target = stored.get("redirect") or _redirect_home()
+    target = stored.get("redirect") or ac.redirect_home(_CTX)
     redirect = RedirectResponse(target, status_code=303)
-    redirect.delete_cookie(_STATE_COOKIE)
-    _set_refresh_cookie(redirect, request, data["refresh_token"])
+    redirect.delete_cookie(ac.STATE_COOKIE)
+    ac.set_refresh_cookie(redirect, request, data["refresh_token"], _CTX)
     return redirect
 
 
@@ -297,43 +153,45 @@ async def oauth_callback(
 @router.post(
     "/signup",
     summary="이메일 회원가입",
-    response_model=SignupResponse,
+    response_model=ac.SignupResponse,
     openapi_extra=PUBLIC,
 )
-async def email_signup(body: EmailCredentials, request: Request, response: Response):
+async def email_signup(
+    body: ac.EmailCredentials, request: Request, response: Response
+):
     """이메일/비밀번호 가입. 이메일 확인이 켜져 있으면 세션 없이 확인 메일만 발송된다."""
     try:
         data = await auth_service.sign_up(body.email, body.password)
     except auth_service.AuthServiceError as e:
-        raise _auth_error(e)
+        raise ac.auth_error(e)
 
     if data.get("access_token"):  # 자동 확인(autoconfirm) — 바로 로그인 상태
-        session = _issue_session(data, request, response)
-        return SignupResponse(
+        session = ac.issue_session(data, request, response, _CTX)
+        return ac.SignupResponse(
             email_confirmation_required=False,
             session=session.session,
             user=session.user,
         )
     # 이메일 확인 대기 — user 객체가 최상위 또는 user 키로 온다
-    return SignupResponse(
+    return ac.SignupResponse(
         email_confirmation_required=True,
-        user=_to_auth_user(data if data.get("id") else data.get("user")),
+        user=ac.to_auth_user(data if data.get("id") else data.get("user")),
     )
 
 
 @router.post(
     "/login",
     summary="이메일 로그인",
-    response_model=AuthSessionResponse,
+    response_model=ac.AuthSessionResponse,
     openapi_extra=PUBLIC,
 )
-async def email_login(body: EmailCredentials, request: Request, response: Response):
+async def email_login(body: ac.EmailCredentials, request: Request, response: Response):
     """이메일/비밀번호 로그인 — access token은 본문, refresh token은 쿠키로."""
     try:
         data = await auth_service.sign_in_with_password(body.email, body.password)
     except auth_service.AuthServiceError as e:
-        raise _auth_error(e, unauthorized=True)
-    return _issue_session(data, request, response)
+        raise ac.auth_error(e, unauthorized=True)
+    return ac.issue_session(data, request, response, _CTX)
 
 
 # ---------- 세션 관리 ----------
@@ -342,7 +200,7 @@ async def email_login(body: EmailCredentials, request: Request, response: Respon
 @router.post(
     "/refresh",
     summary="세션 갱신 (쿠키 기반, 본문 불필요)",
-    response_model=AuthSessionResponse,
+    response_model=ac.AuthSessionResponse,
     openapi_extra=PUBLIC,
 )
 async def refresh_session(request: Request, response: Response):
@@ -351,7 +209,7 @@ async def refresh_session(request: Request, response: Response):
     rotation — 새 refresh token이 쿠키로 재발급되고 이전 것은 폐기된다.
     FE는 본문 없이 credentials 포함 POST만 하면 된다.
     """
-    token = request.cookies.get(_REFRESH_COOKIE)
+    token = request.cookies.get(ac.REFRESH_COOKIE)
     if token is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -360,16 +218,16 @@ async def refresh_session(request: Request, response: Response):
     try:
         data = await auth_service.refresh_session(token)
     except auth_service.AuthServiceError as e:
-        error = _auth_error(e, unauthorized=True)
+        error = ac.auth_error(e, unauthorized=True)
         # 무효한 refresh token은 쿠키를 지워 재로그인을 유도한다
         # (HTTPException을 raise하면 주입된 response의 쿠키 헤더가 반영되지
         #  않으므로 실패 응답을 직접 구성한다)
         failure = JSONResponse(
             status_code=error.status_code, content={"detail": error.detail}
         )
-        _delete_refresh_cookie(failure, request)
+        ac.delete_refresh_cookie(failure, request, _CTX)
         return failure
-    return _issue_session(data, request, response)
+    return ac.issue_session(data, request, response, _CTX)
 
 
 @router.post(
@@ -391,10 +249,10 @@ async def logout(
     refresh token으로 세션을 복원한 뒤 폐기한다. 폐기 후에도 access token은
     남은 만료 시간까지는 유효하다(서명 검증 방식의 한계).
     """
-    _delete_refresh_cookie(response, request)
+    ac.delete_refresh_cookie(response, request, _CTX)
 
     access_token = credentials.credentials if credentials else None
-    cookie_token = request.cookies.get(_REFRESH_COOKIE)
+    cookie_token = request.cookies.get(ac.REFRESH_COOKIE)
     try:
         if access_token is None and cookie_token:
             data = await auth_service.refresh_session(cookie_token)
@@ -403,7 +261,7 @@ async def logout(
             await auth_service.sign_out(access_token)
     except auth_service.AuthServiceError as e:
         if e.status_code >= 500:
-            raise _auth_error(e)
+            raise ac.auth_error(e)
         # 이미 만료/폐기된 토큰 — 로그아웃 목적은 달성된 상태
 
 

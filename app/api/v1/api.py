@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     admin,
+    admin_auth,
     auth,
     difficulty_crawl,
     health,
@@ -27,4 +28,5 @@ api_router.include_router(
     difficulty_crawl.router, prefix="/difficulty-crawl", tags=["DifficultyCrawl"]
 )
 # 어드민 API (인증 + ADMIN 역할)
+api_router.include_router(admin_auth.router, prefix="/admin/auth", tags=["AdminAuth"])
 api_router.include_router(admin.router, prefix="/admin", tags=["Admin"])
