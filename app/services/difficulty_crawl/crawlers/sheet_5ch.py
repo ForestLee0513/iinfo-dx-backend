@@ -21,6 +21,9 @@ class Sheet5chCrawler:
       {"crawler": "5ch_sheet",
        "url": "https://docs.google.com/.../pubhtml",
        "play_style": "SP", "level": 12}
+    선택 키:
+      "name": 표 이름 지정 (미지정 시 "5ch {style}☆{level}")
+      "slug": 표 slug 지정 (미지정 시 "5ch-{style}{level}")
     """
 
     async def crawl(self, client: httpx.AsyncClient, target: dict) -> list[TableResult]:
@@ -37,8 +40,8 @@ class Sheet5chCrawler:
         parsed = parse_sheet(resp.text, level)
 
         result = TableResult(TableDef(
-            slug=f"5ch-{style.lower()}{level}",
-            name=f"5ch {style}☆{level}",
+            slug=target.get("slug") or f"5ch-{style.lower()}{level}",
+            name=target.get("name") or f"5ch {style}☆{level}",
             source="5ch", play_style=style, level=level,
             rating_type="GRADE", grades=GRADES_5CH,
         ))
