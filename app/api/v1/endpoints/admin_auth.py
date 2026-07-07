@@ -27,9 +27,12 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from redis.exceptions import RedisError
 
+import asyncio
+
 from app.api.deps import AdminUser
 from app.api.v1.endpoints import auth_common as ac
 from app.core.security import bearer_scheme
+from app.crud import crud_bans
 from app.db.redis import get_redis
 from app.schemas.user import AuthUser, UserRole
 from app.core.config import settings
@@ -147,6 +150,15 @@ async def admin_oauth_callback(
                 pass
         return ac.callback_failure("관리자 권한이 필요합니다", _CTX)
 
+    active_ban = await asyncio.to_thread(crud_bans.get_active_ban, user.id)
+    if active_ban:
+        if data.get("access_token"):
+            try:
+                await auth_service.sign_out(data["access_token"])
+            except auth_service.AuthServiceError:
+                pass
+        return ac.callback_failure("접근이 제한된 계정입니다", _CTX)
+
     target = stored.get("redirect") or ac.redirect_home(_CTX)
     redirect = RedirectResponse(target, status_code=303)
     redirect.delete_cookie(ac.STATE_COOKIE)
@@ -174,7 +186,7 @@ async def admin_email_login(
     except auth_service.AuthServiceError as e:
         raise ac.auth_error(e, unauthorized=True)
     # issue_session이 ctx.required_role(ADMIN) 미달을 403으로 막는다
-    return ac.issue_session(data, request, response, _CTX)
+    return await ac.issue_session(data, request, response, _CTX)
 
 
 # ---------- 세션 관리 ----------
@@ -205,7 +217,7 @@ async def admin_refresh_session(request: Request, response: Response):
         )
         ac.delete_refresh_cookie(failure, request, _CTX)
         return failure
-    return ac.issue_session(data, request, response, _CTX)
+    return await ac.issue_session(data, request, response, _CTX)
 
 
 @router.post(

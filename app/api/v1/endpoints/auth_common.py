@@ -8,6 +8,7 @@ PKCE Redis 키 네임스페이스)은 AuthContext로 주입한다.
 각자의 리다이렉트 정책과 역할 게이트를 갖는다.
 """
 
+import asyncio
 from dataclasses import dataclass
 from urllib.parse import urlencode, urlsplit
 
@@ -17,6 +18,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.security import extract_app_role
+from app.crud import crud_bans
 from app.schemas.user import AuthUser, UserRole
 from app.services import auth_service
 
@@ -146,18 +148,24 @@ def set_state_cookie(response: Response, state: str) -> None:
 # ---------- 세션 발급 ----------
 
 
-def issue_session(
+async def issue_session(
     data: dict, request: Request, response: Response, ctx: AuthContext
 ) -> AuthSessionResponse:
     """GoTrue 토큰 응답 → refresh 쿠키 발급 + 본문(access token만) 구성.
 
-    ctx.required_role 미달 사용자는 세션을 발급하지 않고 403으로 막는다.
+    접근 제한 계정이거나 ctx.required_role 미달 사용자는 403으로 막는다.
     """
     user = to_auth_user(data.get("user"))
     if not data.get("access_token") or not data.get("refresh_token") or user is None:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Supabase 세션 응답이 올바르지 않습니다",
+        )
+    active_ban = await asyncio.to_thread(crud_bans.get_active_ban, user.id)
+    if active_ban:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="접근이 제한된 계정입니다.",
         )
     if not user.has_role(ctx.required_role):
         raise HTTPException(
