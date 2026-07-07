@@ -170,13 +170,23 @@ async def oauth_callback(
     openapi_extra=PUBLIC,
 )
 async def email_signup(
-    body: ac.EmailCredentials, request: Request, response: Response
+    body: ac.SignupBody, request: Request, response: Response
 ):
     """이메일/비밀번호 가입. 이메일 확인이 켜져 있으면 세션 없이 확인 메일만 발송된다."""
     try:
         data = await auth_service.sign_up(body.email, body.password)
     except auth_service.AuthServiceError as e:
         raise ac.auth_error(e)
+
+    # is_public=False일 때만 Admin API로 override — 트리거 기본값(true)과 다를 경우에만
+    if not body.is_public:
+        raw_user = data if data.get("id") else data.get("user") or {}
+        user_id = raw_user.get("id")
+        if user_id:
+            try:
+                await auth_service.update_user_metadata(user_id, {"public": False})
+            except auth_service.AuthServiceError:
+                pass  # 메타데이터 설정 실패는 가입 자체를 막지 않는다
 
     if data.get("access_token"):  # 자동 확인(autoconfirm) — 바로 로그인 상태
         session = await ac.issue_session(data, request, response, _CTX)
@@ -186,9 +196,13 @@ async def email_signup(
             user=session.user,
         )
     # 이메일 확인 대기 — user 객체가 최상위 또는 user 키로 온다
+    raw_user = data if data.get("id") else data.get("user")
+    auth_user = ac.to_auth_user(raw_user)
+    if auth_user and not body.is_public:
+        auth_user = auth_user.model_copy(update={"is_public": False})
     return ac.SignupResponse(
         email_confirmation_required=True,
-        user=ac.to_auth_user(data if data.get("id") else data.get("user")),
+        user=auth_user,
     )
 
 
