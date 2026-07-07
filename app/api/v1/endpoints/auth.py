@@ -18,6 +18,7 @@
 클라이언트(web)용이며 어드민 전용 로그인은 endpoints/admin_auth.py에 있다.
 """
 
+import asyncio
 import json
 import secrets
 from typing import Annotated
@@ -31,6 +32,7 @@ from app.api.deps import CurrentUser
 from app.api.v1.endpoints import auth_common as ac
 from app.core.security import bearer_scheme
 from app.core.openapi import PUBLIC
+from app.crud import crud_bans
 from app.db.redis import get_redis
 from app.schemas.user import AuthUser, UserRole
 from app.core.config import settings
@@ -139,6 +141,17 @@ async def oauth_callback(
         return ac.callback_failure(f"OAuth 코드 교환 실패: {error.detail}", _CTX)
     if not data.get("refresh_token"):
         return ac.callback_failure("Supabase 세션 응답이 올바르지 않습니다", _CTX)
+
+    user = ac.to_auth_user(data.get("user"))
+    if user:
+        active_ban = await asyncio.to_thread(crud_bans.get_active_ban, user.id)
+        if active_ban:
+            if data.get("access_token"):
+                try:
+                    await auth_service.sign_out(data["access_token"])
+                except auth_service.AuthServiceError:
+                    pass
+            return ac.callback_failure("접근이 제한된 계정입니다", _CTX)
 
     target = stored.get("redirect") or ac.redirect_home(_CTX)
     redirect = RedirectResponse(target, status_code=303)
