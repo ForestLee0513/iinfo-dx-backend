@@ -82,6 +82,12 @@ class EmailCredentials(BaseModel):
     password: str
 
 
+class SignupBody(BaseModel):
+    email: str
+    password: str
+    is_public: bool = True
+
+
 # ---------- 사용자 변환/권한 ----------
 
 
@@ -95,6 +101,7 @@ def to_auth_user(user: dict | None) -> AuthUser | None:
         email=user.get("email"),
         provider=app_metadata.get("provider"),
         app_role=extract_app_role(app_metadata),
+        is_public=bool(app_metadata.get("public", True)),
     )
 
 
