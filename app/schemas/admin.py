@@ -1,5 +1,6 @@
 """어드민 API 요청/응답 모델."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -55,3 +56,29 @@ class ScheduleResponse(ScheduleConfig):
     timezone: str
     source: Literal["env", "redis"]  # redis = 어드민이 변경한 값이 적용 중
     next_run_at: str | None = None  # enabled=False면 None
+
+
+class BanRequest(BaseModel):
+    """사용자 접근 제한 요청."""
+
+    reason: str  # 정지 사유 (필수)
+    ban_until: datetime | None = None  # None = 영구 정지, 지정 시 해당 일시까지
+
+
+class BanRecord(BaseModel):
+    """user_bans 테이블 레코드 — 정지 이력 1건."""
+
+    id: str
+    user_id: str
+    reason: str
+    ban_until: datetime | None = None
+    banned_by: str
+    banned_at: datetime
+    lifted_at: datetime | None = None
+    lifted_by: str | None = None
+
+
+class BanListResponse(BaseModel):
+    """사용자 접근 제한 이력 목록."""
+
+    records: list[BanRecord]

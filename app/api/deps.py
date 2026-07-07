@@ -9,6 +9,7 @@ get_current_user를 엔드포인트 파라미터(또는 라우터의 dependencie
 app_metadata.role로 처리한다(README '어드민 권한 부여' 참고).
 """
 
+import asyncio
 from typing import Annotated, Callable
 
 import jwt
@@ -16,10 +17,11 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.security import bearer_scheme, decode_token, extract_app_role
+from app.crud import crud_bans
 from app.schemas.user import AuthUser, UserRole
 
 
-def get_current_user(
+async def get_current_user(
     credentials: Annotated[
         HTTPAuthorizationCredentials | None, Depends(bearer_scheme)
     ],
@@ -41,12 +43,20 @@ def get_current_user(
         )
 
     app_metadata = payload.get("app_metadata") or {}
-    return AuthUser(
+    user = AuthUser(
         id=payload["sub"],
         email=payload.get("email"),
         provider=app_metadata.get("provider"),
         app_role=extract_app_role(app_metadata),
     )
+
+    active_ban = await asyncio.to_thread(crud_bans.get_active_ban, user.id)
+    if active_ban:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="접근이 제한된 계정입니다.",
+        )
+    return user
 
 
 CurrentUser = Annotated[AuthUser, Depends(get_current_user)]

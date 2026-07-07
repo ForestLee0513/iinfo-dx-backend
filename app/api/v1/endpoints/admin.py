@@ -8,6 +8,7 @@
 모든 엔드포인트는 Supabase 토큰 검증 + ADMIN_EMAILS 화이트리스트로 보호한다.
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -15,7 +16,11 @@ from redis.exceptions import RedisError
 
 from app.services.admin import jobs, store
 from app.api.deps import AdminUser
+from app.crud import crud_bans
 from app.schemas.admin import (
+    BanListResponse,
+    BanRecord,
+    BanRequest,
     CrawlJob,
     JobCreateRequest,
     JobListResponse,
@@ -103,3 +108,36 @@ async def update_schedule(body: ScheduleConfig, user: AdminUser):
     scheduler.apply_schedule(config)
     logger.info("크롤 스케줄 변경: %s (by %s)", config, user.email)
     return _schedule_response(config, "redis")
+
+
+# ── 사용자 접근 제한 ──────────────────────────────────────
+
+
+@router.post("/users/{user_id}/ban", response_model=BanRecord, status_code=status.HTTP_201_CREATED)
+async def ban_user(user_id: str, body: BanRequest, admin: AdminUser):
+    """사용자 접근을 제한한다. ban_until 미지정 시 영구 정지."""
+    ban_until_str = body.ban_until.isoformat() if body.ban_until else None
+    ban = await asyncio.to_thread(
+        crud_bans.create_ban, user_id, body.reason, ban_until_str, admin.email
+    )
+    logger.info("사용자 접근 제한: %s (by %s, until=%s)", user_id, admin.email, ban_until_str)
+    return ban
+
+
+@router.delete("/users/{user_id}/ban", status_code=status.HTTP_204_NO_CONTENT)
+async def unban_user(user_id: str, admin: AdminUser):
+    """현재 활성 접근 제한을 해제한다."""
+    lifted = await asyncio.to_thread(crud_bans.lift_active_ban, user_id, admin.email)
+    if not lifted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="활성 접근 제한이 없습니다.",
+        )
+    logger.info("사용자 접근 제한 해제: %s (by %s)", user_id, admin.email)
+
+
+@router.get("/users/{user_id}/bans", response_model=BanListResponse)
+async def list_user_bans(user_id: str, _: AdminUser):
+    """사용자의 접근 제한 이력을 최신 순으로 반환한다."""
+    records = await asyncio.to_thread(crud_bans.list_bans, user_id)
+    return BanListResponse(records=records)

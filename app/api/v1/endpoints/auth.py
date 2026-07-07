@@ -166,7 +166,7 @@ async def email_signup(
         raise ac.auth_error(e)
 
     if data.get("access_token"):  # 자동 확인(autoconfirm) — 바로 로그인 상태
-        session = ac.issue_session(data, request, response, _CTX)
+        session = await ac.issue_session(data, request, response, _CTX)
         return ac.SignupResponse(
             email_confirmation_required=False,
             session=session.session,
@@ -191,7 +191,7 @@ async def email_login(body: ac.EmailCredentials, request: Request, response: Res
         data = await auth_service.sign_in_with_password(body.email, body.password)
     except auth_service.AuthServiceError as e:
         raise ac.auth_error(e, unauthorized=True)
-    return ac.issue_session(data, request, response, _CTX)
+    return await ac.issue_session(data, request, response, _CTX)
 
 
 # ---------- 세션 관리 ----------
@@ -227,7 +227,7 @@ async def refresh_session(request: Request, response: Response):
         )
         ac.delete_refresh_cookie(failure, request, _CTX)
         return failure
-    return ac.issue_session(data, request, response, _CTX)
+    return await ac.issue_session(data, request, response, _CTX)
 
 
 @router.post(

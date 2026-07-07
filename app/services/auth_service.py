@@ -119,3 +119,19 @@ async def sign_out(access_token: str) -> None:
         json={},
         headers={"Authorization": f"Bearer {access_token}"},
     )
+
+
+async def update_user_metadata(user_id: str, app_metadata: dict) -> dict:
+    """Supabase Admin API로 사용자의 app_metadata를 업데이트한다 (부분 병합)."""
+    async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT) as client:
+        response = await client.put(
+            f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
+            json={"app_metadata": app_metadata},
+            headers={
+                "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
+            },
+        )
+    if not response.is_success:
+        raise AuthServiceError(response.status_code, _error_message(response))
+    return response.json()
