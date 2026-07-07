@@ -71,11 +71,11 @@ async def oauth_login(
     PKCE verifier(+ redirect URL)를 Redis에 저장하고 조회 키(state)를
     httpOnly 쿠키로 내려준다.
     """
-    if provider not in settings.OAUTH_PROVIDERS:
-        raise HTTPException(
-            status_code=404, detail=f"지원하지 않는 프로바이더: {provider}"
-        )
     redirect_url = ac.sanitize_redirect_url(redirect_url, _CTX)
+    if provider not in settings.OAUTH_PROVIDERS:
+        return ac.login_start_failure(
+            f"지원하지 않는 프로바이더: {provider}", redirect_url, _CTX
+        )
 
     verifier, challenge = auth_service.generate_pkce()
     state = secrets.token_urlsafe(32)
@@ -86,8 +86,8 @@ async def oauth_login(
             ex=ac.PKCE_TTL_SECONDS,
         )
     except RedisError:
-        raise HTTPException(
-            status_code=503, detail="Redis를 사용할 수 없어 OAuth 로그인을 시작할 수 없습니다"
+        return ac.login_start_failure(
+            "Redis를 사용할 수 없어 OAuth 로그인을 시작할 수 없습니다", redirect_url, _CTX
         )
 
     authorize_url = auth_service.build_authorize_url(

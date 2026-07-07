@@ -206,13 +206,28 @@ def sanitize_redirect_url(redirect_url: str | None, ctx: AuthContext) -> str:
     return redirect_home(ctx)
 
 
-def callback_failure(detail: str, ctx: AuthContext) -> RedirectResponse:
-    """콜백 실패 처리 — 홈으로 ?error=를 붙여 돌려보낸다."""
-    target = redirect_home(ctx)
+def _redirect_with_error(target: str, detail: str) -> RedirectResponse:
+    """target에 ?error=를 붙여 303 리다이렉트한다 (기존 쿼리스트링 보존)."""
     separator = "&" if urlsplit(target).query else "?"
     return RedirectResponse(
         f"{target}{separator}{urlencode({'error': detail})}", status_code=303
     )
+
+
+def callback_failure(detail: str, ctx: AuthContext) -> RedirectResponse:
+    """콜백 실패 처리 — 홈으로 ?error=를 붙여 돌려보낸다."""
+    return _redirect_with_error(redirect_home(ctx), detail)
+
+
+def login_start_failure(
+    detail: str, redirect_url: str, ctx: AuthContext
+) -> RedirectResponse:
+    """로그인 시작 실패 처리 — 검증된 redirect(없으면 홈)로 ?error=를 붙여 돌려보낸다.
+
+    브라우저가 /login/{provider}로 전체 페이지 이동하므로, 시작 단계에서
+    실패해도 JSON을 노출하지 않고 FE로 되돌려 ?error=를 전달한다.
+    """
+    return _redirect_with_error(redirect_url or redirect_home(ctx), detail)
 
 
 # ---------- GoTrue 오류 변환 ----------
