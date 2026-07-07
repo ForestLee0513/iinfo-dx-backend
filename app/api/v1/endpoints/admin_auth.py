@@ -18,8 +18,10 @@ web 플로우의 state로 어드민 콜백을 통과할 수 없도록 격리한�
 어드민 API는 문서상 internal 전용이므로 PUBLIC 데코레이터를 붙이지 않는다.
 """
 
+import asyncio
 import json
 import secrets
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -27,12 +29,10 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from redis.exceptions import RedisError
 
-import asyncio
-
 from app.api.deps import AdminUser
 from app.api.v1.endpoints import auth_common as ac
 from app.core.security import bearer_scheme
-from app.crud import crud_bans
+from app.crud import crud_bans, crud_profiles
 from app.db.redis import get_redis
 from app.schemas.user import AuthUser, UserRole
 from app.core.config import settings
@@ -141,22 +141,42 @@ async def admin_oauth_callback(
     user = ac.to_auth_user(data.get("user"))
     if not data.get("refresh_token") or user is None:
         return ac.callback_failure("Supabase 세션 응답이 올바르지 않습니다", _CTX)
-    if not user.has_role(UserRole.ADMIN):
-        # 발급된 세션은 즉시 폐기해 흔적을 남기지 않는다
+
+    async def _revoke():
         if data.get("access_token"):
             try:
                 await auth_service.sign_out(data["access_token"])
             except auth_service.AuthServiceError:
                 pass
+
+    # user_profiles에서 role·ban을 병렬 조회
+    profile, active_ban = await asyncio.gather(
+        asyncio.to_thread(crud_profiles.get_profile, user.id),
+        asyncio.to_thread(crud_bans.get_active_ban, user.id),
+    )
+    user = user.model_copy(update={"app_role": profile.role})
+
+    if not user.has_role(UserRole.ADMIN):
+        # role이 없는 경우: 신규 가입 감지 — created_at ≈ last_sign_in_at이면
+        # 이번 OAuth로 처음 생성된 계정이므로 계정까지 삭제해 흔적을 남기지 않는다
+        user_data = data.get("user") or {}
+        try:
+            ca = datetime.fromisoformat(user_data["created_at"].replace("Z", "+00:00"))
+            lsa = datetime.fromisoformat(user_data["last_sign_in_at"].replace("Z", "+00:00"))
+            if abs((lsa - ca).total_seconds()) < 5:
+                await _revoke()
+                try:
+                    await auth_service.delete_user(user.id)
+                except auth_service.AuthServiceError:
+                    pass
+                return ac.callback_failure("등록된 계정이 아닙니다. 어드민 계정으로 로그인하세요", _CTX)
+        except (KeyError, ValueError, TypeError):
+            pass
+        await _revoke()
         return ac.callback_failure("관리자 권한이 필요합니다", _CTX)
 
-    active_ban = await asyncio.to_thread(crud_bans.get_active_ban, user.id)
     if active_ban:
-        if data.get("access_token"):
-            try:
-                await auth_service.sign_out(data["access_token"])
-            except auth_service.AuthServiceError:
-                pass
+        await _revoke()
         return ac.callback_failure("접근이 제한된 계정입니다", _CTX)
 
     target = stored.get("redirect") or ac.redirect_home(_CTX)

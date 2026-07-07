@@ -16,8 +16,8 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
 
-from app.core.security import bearer_scheme, decode_token, extract_app_role
-from app.crud import crud_bans
+from app.core.security import bearer_scheme, decode_token
+from app.crud import crud_bans, crud_profiles
 from app.schemas.user import AuthUser, UserRole
 
 
@@ -43,20 +43,24 @@ async def get_current_user(
         )
 
     app_metadata = payload.get("app_metadata") or {}
-    user = AuthUser(
-        id=payload["sub"],
-        email=payload.get("email"),
-        provider=app_metadata.get("provider"),
-        app_role=extract_app_role(app_metadata),
-    )
+    user_id = payload["sub"]
 
-    active_ban = await asyncio.to_thread(crud_bans.get_active_ban, user.id)
+    active_ban, profile = await asyncio.gather(
+        asyncio.to_thread(crud_bans.get_active_ban, user_id),
+        asyncio.to_thread(crud_profiles.get_profile, user_id),
+    )
     if active_ban:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="접근이 제한된 계정입니다.",
         )
-    return user
+    return AuthUser(
+        id=user_id,
+        email=payload.get("email"),
+        provider=app_metadata.get("provider"),
+        app_role=profile.role,
+        is_public=profile.is_public,
+    )
 
 
 CurrentUser = Annotated[AuthUser, Depends(get_current_user)]
