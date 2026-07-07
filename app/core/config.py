@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # (open redirect 방지). 지금은 로컬 FE만 허용 — 운영 도메인은 여기에 추가한다.
     OAUTH_ALLOWED_REDIRECT_URLS: list[str] = ["http://localhost:3000"]
 
+    # 어드민 전용 로그인(/admin/auth)의 OAuth 완료 후 허용 리다이렉트 URL 목록.
+    # 어드민 FE는 사용자 클라이언트와 별도 오리진이므로 위 목록과 분리한다
+    # (.env에서 JSON 배열 한 줄). 지금은 로컬 어드민 FE만 허용 — 운영 도메인은 여기에 추가.
+    ADMIN_ALLOWED_REDIRECT_URLS: list[str] = ["http://localhost:3001"]
+
     # 인증 쿠키(refresh token 등) SameSite 정책.
     # FE가 API와 다른 사이트(등록 도메인 자체가 다름)에서 붙으면 "none"으로
     # (Secure가 자동 강제됨). 같은 도메인/서브도메인 구성이면 "lax"면 충분하다.
