@@ -11,6 +11,7 @@ services:
     environment:
       # 컨테이너 안에서는 redis 서비스 호스트명 사용 (.env 값보다 우선)
       REDIS_URL: redis://redis:6379/0
+      TZ: Asia/Seoul
     volumes:
       # 로컬 코드 변경이 컨테이너에 즉시 반영됨 (--reload와 함께 개발용)
       - ./app:/app/app
@@ -29,6 +30,8 @@ services:
     volumes:
       - redis-data:/data
     restart: unless-stopped
+    environment:
+      TZ: Asia/Seoul
 
 volumes:
   redis-data:
