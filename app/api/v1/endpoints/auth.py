@@ -32,7 +32,7 @@ from app.api.deps import CurrentUser
 from app.api.v1.endpoints import auth_common as ac
 from app.core.security import bearer_scheme
 from app.core.openapi import PUBLIC
-from app.crud import crud_bans
+from app.crud import crud_bans, crud_profiles
 from app.db.redis import get_redis
 from app.schemas.user import AuthUser, UserRole
 from app.core.config import settings
@@ -178,15 +178,15 @@ async def email_signup(
     except auth_service.AuthServiceError as e:
         raise ac.auth_error(e)
 
-    # is_public=False일 때만 Admin API로 override — 트리거 기본값(true)과 다를 경우에만
+    # is_public=False일 때만 user_profiles 업서트 — 트리거 기본값(true)과 다를 경우에만
     if not body.is_public:
         raw_user = data if data.get("id") else data.get("user") or {}
         user_id = raw_user.get("id")
         if user_id:
             try:
-                await auth_service.update_user_metadata(user_id, {"public": False})
-            except auth_service.AuthServiceError:
-                pass  # 메타데이터 설정 실패는 가입 자체를 막지 않는다
+                await asyncio.to_thread(crud_profiles.upsert_is_public, user_id, False)
+            except Exception:
+                pass  # 프로필 설정 실패는 가입 자체를 막지 않는다
 
     if data.get("access_token"):  # 자동 확인(autoconfirm) — 바로 로그인 상태
         session = await ac.issue_session(data, request, response, _CTX)

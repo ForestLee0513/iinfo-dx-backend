@@ -29,8 +29,8 @@ class AuthUser(BaseModel):
     email: str | None = None
     provider: str | None = None  # "google" | "email" 등
     # role: str | None = None  # JWT role 클레임 (일반적으로 "authenticated" — 서비스 권한 아님)
-    app_role: UserRole = UserRole.USER  # 서비스 권한 (app_metadata.role, 없으면 USER)
-    is_public: bool = True  # 공개 여부 (app_metadata.public, 없으면 True)
+    app_role: UserRole = UserRole.USER  # 서비스 권한 (user_profiles.role)
+    is_public: bool = True  # 공개 여부 (user_profiles.is_public)
 
     def has_role(self, required: UserRole) -> bool:
         return ROLE_LEVELS[self.app_role] >= ROLE_LEVELS[required]

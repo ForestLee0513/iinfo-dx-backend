@@ -17,8 +17,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.core.security import extract_app_role
-from app.crud import crud_bans
+from app.crud import crud_bans, crud_profiles
 from app.schemas.user import AuthUser, UserRole
 from app.services import auth_service
 
@@ -100,8 +99,6 @@ def to_auth_user(user: dict | None) -> AuthUser | None:
         id=str(user["id"]),
         email=user.get("email"),
         provider=app_metadata.get("provider"),
-        app_role=extract_app_role(app_metadata),
-        is_public=bool(app_metadata.get("public", True)),
     )
 
 
@@ -168,7 +165,11 @@ async def issue_session(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Supabase 세션 응답이 올바르지 않습니다",
         )
-    active_ban = await asyncio.to_thread(crud_bans.get_active_ban, user.id)
+    active_ban, profile = await asyncio.gather(
+        asyncio.to_thread(crud_bans.get_active_ban, user.id),
+        asyncio.to_thread(crud_profiles.get_profile, user.id),
+    )
+    user = user.model_copy(update={"app_role": profile.role, "is_public": profile.is_public})
     if active_ban:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
