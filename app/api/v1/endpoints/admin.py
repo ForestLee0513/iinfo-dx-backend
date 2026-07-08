@@ -4,6 +4,7 @@
 - 작업 조회: GET /crawl/jobs, GET /crawl/jobs/{id}
 - 주간 크롤 스케줄 조회/변경: GET·PUT /crawl/schedule
   (변경값은 Redis에 저장되어 재기동 후에도 유지, .env 기본값보다 우선)
+- 회원 관리: GET /users (목록), GET /users/{id} (상세), 접근 제한 부여/해제/이력
 
 모든 엔드포인트는 Supabase 토큰 검증 + ADMIN_EMAILS 화이트리스트로 보호한다.
 """
@@ -14,10 +15,13 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, status
 from redis.exceptions import RedisError
 
+from app.services import auth_service
 from app.services.admin import jobs, store
 from app.api.deps import AdminUser
-from app.crud import crud_bans
+from app.crud import crud_bans, crud_profiles, crud_users
 from app.schemas.admin import (
+    AdminUserDetail,
+    AdminUserListResponse,
     BanListResponse,
     BanRecord,
     BanRequest,
@@ -26,6 +30,7 @@ from app.schemas.admin import (
     JobListResponse,
     ScheduleConfig,
     ScheduleResponse,
+    UserProfileDetail,
 )
 from app.core.config import settings
 from app.services.difficulty_crawl import scheduler
@@ -108,6 +113,82 @@ async def update_schedule(body: ScheduleConfig, user: AdminUser):
     scheduler.apply_schedule(config)
     logger.info("크롤 스케줄 변경: %s (by %s)", config, user.email)
     return _schedule_response(config, "redis")
+
+
+# ── 회원 조회 ─────────────────────────────────────────
+
+
+def _auth_error_to_http(e: auth_service.AuthServiceError) -> HTTPException:
+    """GoTrue Admin API 오류를 HTTP 응답으로 변환한다."""
+    if e.status_code == status.HTTP_404_NOT_FOUND:
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다."
+        )
+    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=e.message)
+
+
+def _user_summary_fields(user: dict, active_ban: dict | None) -> dict:
+    """GoTrue 사용자 객체 + 현재 정지 레코드에서 목록/상세 공통 필드를 추출한다."""
+    app_metadata = user.get("app_metadata") or {}
+    return {
+        "id": user["id"],
+        "email": user.get("email"),
+        "provider": app_metadata.get("provider"),
+        "created_at": user["created_at"],
+        "last_sign_in_at": user.get("last_sign_in_at"),
+        "is_banned": active_ban is not None,
+        "ban_reason": active_ban["reason"] if active_ban else None,
+        "ban_until": active_ban["ban_until"] if active_ban else None,
+    }
+
+
+@router.get("/users", response_model=AdminUserListResponse)
+async def list_users(
+    _: AdminUser,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    email: str | None = Query(None, min_length=1, description="이메일 부분 일치 검색"),
+    provider: str | None = Query(
+        None, min_length=1, description='가입 경로 필터 ("google" | "email" 등)'
+    ),
+    is_banned: bool | None = Query(
+        None, description="정지 여부 필터 — true=정지 중, false=활성(정지 아님)"
+    ),
+):
+    """회원 목록 조회 — auth.users 직접 조회 (admin_list_users RPC).
+
+    이메일 부분 일치 / 가입 경로 / 정지 여부 필터와 페이지네이션을 DB에서
+    한 번에 처리한다. total은 필터 적용 후 개수.
+    """
+    result = await asyncio.to_thread(
+        crud_users.list_users, email, provider, is_banned, page, per_page
+    )
+    return AdminUserListResponse(
+        users=result["users"],
+        page=page,
+        per_page=per_page,
+        total=result["total"],
+    )
+
+
+@router.get("/users/{user_id}", response_model=AdminUserDetail)
+async def get_user_detail(user_id: str, _: AdminUser):
+    """회원 상세 조회 — Auth 정보 + user_profiles + 현재 활성 정지."""
+    try:
+        user = await auth_service.get_user_by_id(user_id)
+    except auth_service.AuthServiceError as e:
+        raise _auth_error_to_http(e)
+    profile_row, active_ban = await asyncio.gather(
+        asyncio.to_thread(crud_profiles.get_profile_row, user_id),
+        asyncio.to_thread(crud_bans.get_active_ban, user_id),
+    )
+    # 프로필 행이 없으면(트리거 도입 전 가입자) 스키마 기본값으로 응답
+    profile = UserProfileDetail(**profile_row) if profile_row else UserProfileDetail()
+    return AdminUserDetail(
+        **_user_summary_fields(user, active_ban),
+        profile=profile,
+        active_ban=active_ban,
+    )
 
 
 # ── 사용자 접근 제한 ──────────────────────────────────────
