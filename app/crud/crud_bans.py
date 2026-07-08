@@ -5,6 +5,16 @@ from datetime import datetime, timezone
 from app.db.session import get_supabase
 
 
+def _is_ban_active(ban: dict, now: datetime) -> bool:
+    """해제되지 않은(lifted_at IS NULL) 레코드가 현재도 유효한지 판정한다."""
+    if ban["ban_until"] is None:
+        return True  # 영구 정지
+    until = datetime.fromisoformat(ban["ban_until"])
+    if not until.tzinfo:
+        until = until.replace(tzinfo=timezone.utc)
+    return until > now  # 기간 정지 (아직 유효)
+
+
 def get_active_ban(user_id: str) -> dict | None:
     """현재 유효한 접근 제한 레코드를 반환한다. 없으면 None.
 
@@ -13,20 +23,15 @@ def get_active_ban(user_id: str) -> dict | None:
     sb = get_supabase()
     result = (
         sb.table("user_bans")
-        .select("id, reason, ban_until, banned_at, banned_by")
+        .select("id, user_id, reason, ban_until, banned_at, banned_by")
         .eq("user_id", user_id)
         .is_("lifted_at", "null")
         .execute()
     )
     now = datetime.now(timezone.utc)
     for ban in result.data:
-        if ban["ban_until"] is None:
-            return ban  # 영구 정지
-        until = datetime.fromisoformat(ban["ban_until"])
-        if not until.tzinfo:
-            until = until.replace(tzinfo=timezone.utc)
-        if until > now:
-            return ban  # 기간 정지 (아직 유효)
+        if _is_ban_active(ban, now):
+            return ban
     return None
 
 

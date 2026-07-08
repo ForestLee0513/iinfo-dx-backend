@@ -121,18 +121,35 @@ async def sign_out(access_token: str) -> None:
     )
 
 
+def _admin_headers() -> dict:
+    """Supabase Admin API 호출용 service role 헤더."""
+    return {
+        "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
+    }
+
+
 async def delete_user(user_id: str) -> None:
     """Supabase Admin API로 사용자 계정을 영구 삭제한다."""
     async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT) as client:
         response = await client.delete(
             f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
-            headers={
-                "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
-            },
+            headers=_admin_headers(),
         )
     if not response.is_success:
         raise AuthServiceError(response.status_code, _error_message(response))
+
+
+async def get_user_by_id(user_id: str) -> dict:
+    """Supabase Admin API로 단일 사용자 정보를 조회한다."""
+    async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT) as client:
+        response = await client.get(
+            f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
+            headers=_admin_headers(),
+        )
+    if not response.is_success:
+        raise AuthServiceError(response.status_code, _error_message(response))
+    return response.json()
 
 
 async def update_user_metadata(user_id: str, app_metadata: dict) -> dict:
@@ -141,10 +158,7 @@ async def update_user_metadata(user_id: str, app_metadata: dict) -> dict:
         response = await client.put(
             f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
             json={"app_metadata": app_metadata},
-            headers={
-                "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
-            },
+            headers=_admin_headers(),
         )
     if not response.is_success:
         raise AuthServiceError(response.status_code, _error_message(response))
