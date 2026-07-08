@@ -86,6 +86,22 @@ class BanListResponse(BaseModel):
     records: list[BanRecord]
 
 
+class RoleUpdateRequest(BaseModel):
+    """역할 변경 요청 — SUPER_ADMIN 전용 API의 본문.
+
+    SUPER_ADMIN 부여는 API로 불가(1명 제한, SQL로만 처리) — 엔드포인트에서 거부한다.
+    """
+
+    role: UserRole
+
+
+class RoleUpdateResponse(BaseModel):
+    """역할 변경 결과."""
+
+    user_id: str
+    role: UserRole
+
+
 class AdminUserSummary(BaseModel):
     """어드민 회원 목록의 사용자 1명 요약 (Supabase Auth 기반)."""
 

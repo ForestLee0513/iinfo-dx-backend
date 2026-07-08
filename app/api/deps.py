@@ -87,3 +87,7 @@ def require_role(required: UserRole) -> Callable[..., AuthUser]:
 # 어드민 전용 — Supabase 계정의 app_metadata.role == "ADMIN" 이상만 통과
 get_admin_user = require_role(UserRole.ADMIN)
 AdminUser = Annotated[AuthUser, Depends(get_admin_user)]
+
+# 슈퍼어드민 전용 — 역할 부여 등 최상위 권한 작업 (개발자 본인 1명)
+get_super_admin_user = require_role(UserRole.SUPER_ADMIN)
+SuperAdminUser = Annotated[AuthUser, Depends(get_super_admin_user)]

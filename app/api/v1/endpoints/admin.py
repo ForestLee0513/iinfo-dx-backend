@@ -17,7 +17,7 @@ from redis.exceptions import RedisError
 
 from app.services import auth_service
 from app.services.admin import jobs, store
-from app.api.deps import AdminUser
+from app.api.deps import AdminUser, SuperAdminUser
 from app.crud import crud_bans, crud_profiles, crud_users
 from app.schemas.admin import (
     AdminUserDetail,
@@ -28,10 +28,13 @@ from app.schemas.admin import (
     CrawlJob,
     JobCreateRequest,
     JobListResponse,
+    RoleUpdateRequest,
+    RoleUpdateResponse,
     ScheduleConfig,
     ScheduleResponse,
     UserProfileDetail,
 )
+from app.schemas.user import ROLE_LEVELS, UserRole
 from app.core.config import settings
 from app.services.difficulty_crawl import scheduler
 
@@ -196,7 +199,22 @@ async def get_user_detail(user_id: str, _: AdminUser):
 
 @router.post("/users/{user_id}/ban", response_model=BanRecord, status_code=status.HTTP_201_CREATED)
 async def ban_user(user_id: str, body: BanRequest, admin: AdminUser):
-    """사용자 접근을 제한한다. ban_until 미지정 시 영구 정지."""
+    """사용자 접근을 제한한다. ban_until 미지정 시 영구 정지.
+
+    본인은 정지할 수 없고, 자신보다 낮은 역할만 정지할 수 있다
+    (ADMIN → USER, SUPER_ADMIN → ADMIN/USER).
+    """
+    if user_id == admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="자기 자신은 정지할 수 없습니다.",
+        )
+    target = await asyncio.to_thread(crud_profiles.get_profile, user_id)
+    if ROLE_LEVELS[target.role] >= ROLE_LEVELS[admin.app_role]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="자신과 같거나 높은 역할의 사용자는 정지할 수 없습니다.",
+        )
     ban_until_str = body.ban_until.isoformat() if body.ban_until else None
     ban = await asyncio.to_thread(
         crud_bans.create_ban, user_id, body.reason, ban_until_str, admin.email
@@ -222,3 +240,32 @@ async def list_user_bans(user_id: str, _: AdminUser):
     """사용자의 접근 제한 이력을 최신 순으로 반환한다."""
     records = await asyncio.to_thread(crud_bans.list_bans, user_id)
     return BanListResponse(records=records)
+
+
+# ── 역할 부여 ─────────────────────────────────────────
+
+
+@router.put("/users/{user_id}/role", response_model=RoleUpdateResponse)
+async def update_user_role(user_id: str, body: RoleUpdateRequest, admin: SuperAdminUser):
+    """사용자 역할을 변경한다 — SUPER_ADMIN 전용.
+
+    SUPER_ADMIN 부여는 API로 불가(1명 제한 — DB에서 SQL로만 처리).
+    본인 역할도 변경 불가(유일한 SUPER_ADMIN의 강등·락아웃 방지).
+    """
+    if body.role == UserRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SUPER_ADMIN 역할은 API로 부여할 수 없습니다.",
+        )
+    if user_id == admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="자기 자신의 역할은 변경할 수 없습니다.",
+        )
+    try:
+        await auth_service.get_user_by_id(user_id)  # 존재하지 않는 사용자면 404
+    except auth_service.AuthServiceError as e:
+        raise _auth_error_to_http(e)
+    await asyncio.to_thread(crud_profiles.upsert_role, user_id, body.role)
+    logger.info("역할 변경: %s → %s (by %s)", user_id, body.role.value, admin.email)
+    return RoleUpdateResponse(user_id=user_id, role=body.role)
