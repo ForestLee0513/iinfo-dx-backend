@@ -13,12 +13,14 @@ class UserRole(str, Enum):
 
     USER = "USER"
     ADMIN = "ADMIN"
+    SUPER_ADMIN = "SUPER_ADMIN"  # 개발자 본인 전용 — DB 제약으로 1명만 허용
 
 
 # 역할 서열 — require_role은 "요구 레벨 이상"으로 판정하므로 상위 역할이 하위 권한을 포함한다
 ROLE_LEVELS: dict[UserRole, int] = {
     UserRole.USER: 0,
     UserRole.ADMIN: 100,
+    UserRole.SUPER_ADMIN: 200,
 }
 
 
