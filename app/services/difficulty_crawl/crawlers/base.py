@@ -2,7 +2,7 @@
 
 새 난이도표가 생기면:
   1) Crawler 하나 구현하고 @register("이름") 붙이기
-  2) TABLE_CRAWL_TARGETS에 {"crawler": "이름", ...설정} 추가
+  2) POST /api/v1/crawl/targets로 {"kind":"table","crawler":"이름", ...설정} 등록
   → 스키마/동기화 코드는 손댈 필요 없음
 """
 
@@ -69,7 +69,7 @@ CRAWLER_REGISTRY: dict[str, Crawler] = {}
 
 
 def register(name: str):
-    """크롤러 등록 데코레이터. TABLE_CRAWL_TARGETS의 'crawler' 값으로 선택됨."""
+    """크롤러 등록 데코레이터. 등록된 크롤 대상의 'crawler' 값으로 선택됨."""
 
     def deco(cls):
         CRAWLER_REGISTRY[name] = cls()

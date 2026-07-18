@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 스케줄 활성 여부는 Redis 오버라이드/.env 설정으로 apply_schedule에서 결정
+    # 대상별 스케줄은 Redis에 저장된 설정만 적용 (없으면 자동 실행 없음)
     await scheduler.start()
     # 서버 중단으로 끊긴 크롤 작업이 있으면 남은 스텝부터 이어서 실행
     await admin_jobs.resume_interrupted_job()

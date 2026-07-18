@@ -43,21 +43,14 @@ class Settings(BaseSettings):
     # 크롤링 설정
     REQUEST_TIMEOUT: int = 15
     MAX_CONCURRENT: int = 10
-    # 곡 마스터 크롤 타깃 (.env에서 JSON 배열 한 줄).
-    # 예: SONG_CRAWL_TARGETS=[{"crawler":"textage"}]
-    SONG_CRAWL_TARGETS: list[dict] = [{"crawler": "textage"}]
-    # 난이도표 크롤 타깃 (.env에서 JSON 배열 한 줄, 구 CRAWL_TARGETS).
-    # 예: TABLE_CRAWL_TARGETS=[{"crawler":"5ch_sheet","url":"https://...","play_style":"SP","level":12}]
-    TABLE_CRAWL_TARGETS: list[dict] = []
 
-    # 주간 크롤링 스케줄 (곡 마스터 → 난이도표 순차, 기본: 매주 월요일 05:00, TIMEZONE 기준)
-    # 어드민 API로 변경하면 Redis에 저장되어 아래 기본값보다 우선한다.
-    CRAWL_SCHEDULE_ENABLED: bool = True
-    CRAWL_SCHEDULE_DAY: str = "mon"  # mon/tue/wed/thu/fri/sat/sun
-    CRAWL_SCHEDULE_HOUR: int = 5
-    CRAWL_SCHEDULE_MINUTE: int = 0
+    # 크롤 대상(곡 마스터/난이도표)과 스케줄은 env가 아니라 어드민 API로 관리하며
+    # Redis(crawl:targets, crawl:schedules 해시)가 유일한 저장소다 — env 폴백 없음.
+    # 대상 등록: POST /api/v1/crawl/targets. 스케줄 설정: PUT /api/v1/crawl/schedules/{target_key}.
+    # 배포 직후에는 등록된 대상/스케줄이 하나도 없으므로 어드민이 등록하기 전까지
+    # 아무 것도 자동 크롤되지 않는다.
 
-    # Redis — 크롤 작업 상태(재기동 시 이어하기) + 스케줄 오버라이드 저장
+    # Redis — 크롤 작업 상태(재기동 시 이어하기) + 대상별 스케줄 저장
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # 별도 FE(클라이언트/어드민) 오리진 CORS 허용 목록 (.env에서 JSON 배열 한 줄)

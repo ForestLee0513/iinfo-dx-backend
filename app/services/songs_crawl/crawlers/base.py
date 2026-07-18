@@ -39,7 +39,7 @@ SONG_CRAWLER_REGISTRY: dict[str, SongCrawler] = {}
 
 
 def register(name: str):
-    """곡 마스터 크롤러 등록 데코레이터. SONG_CRAWL_TARGETS의 'crawler' 값으로 선택."""
+    """곡 마스터 크롤러 등록 데코레이터. 등록된 크롤 대상의 'crawler' 값으로 선택."""
 
     def deco(cls):
         SONG_CRAWLER_REGISTRY[name] = cls()

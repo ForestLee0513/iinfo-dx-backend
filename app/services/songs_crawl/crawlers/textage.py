@@ -130,7 +130,7 @@ def _clean_text(raw: str) -> str:
 class TextageCrawler:
     """textage 곡 마스터 크롤러.
 
-    target 예시 (SONG_CRAWL_TARGETS): {"crawler": "textage"}
+    등록 예시 (POST /api/v1/crawl/targets): {"kind":"song","id":"textage","label":"Textage","crawler":"textage"}
     """
 
     async def crawl(

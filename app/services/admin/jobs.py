@@ -27,8 +27,8 @@ STEP_TABLE = "table_sync"
 
 _STEPS_BY_SCOPE = {
     "full": [STEP_SONG, STEP_TABLE],  # 곡 마스터가 먼저 — 순서는 코드로 보장
-    "songs": [STEP_SONG],
-    "tables": [STEP_TABLE],
+    "song": [STEP_SONG],
+    "table": [STEP_TABLE],
 }
 
 # 이 프로세스에서 실제 실행 중인 작업 id (Redis의 RUNNING과 달리 살아있음이 보장됨)
@@ -47,8 +47,17 @@ def _now() -> str:
     return datetime.now(ZoneInfo(settings.TIMEZONE)).isoformat()
 
 
-async def create_job(scope: str, triggered_by: str) -> dict:
+async def create_job(
+    scope: str,
+    triggered_by: str,
+    target_id: str | None = None,
+    target: dict | None = None,
+) -> dict:
     """새 작업 생성. 실행 중인 작업이 있으면 JobAlreadyRunning.
+
+    target_id 지정 시 해당 scope("song"|"table") 안의 등록된 대상 하나만 동기화한다.
+    target 지정 시 등록 여부와 무관하게 그 설정(ad-hoc)을 그대로 동기화한다.
+    둘 다 None이면 scope 전체 등록 대상을 동기화한다.
 
     Redis에는 RUNNING인데 이 프로세스에서 실행 중이 아닌 작업(재기동 시
     이어하기까지 실패한 잔재)은 FAILED로 정리하고 새 작업을 만든다.
@@ -69,6 +78,8 @@ async def create_job(scope: str, triggered_by: str) -> dict:
     job = {
         "id": uuid.uuid4().hex,
         "scope": scope,
+        "target_id": target_id,
+        "target": target,
         "status": "RUNNING",
         "triggered_by": triggered_by,
         "steps": [{"name": name, "status": "PENDING", "result": None, "error": None}
@@ -97,11 +108,19 @@ async def execute_job(job: dict) -> dict:
 
             try:
                 if step["name"] == STEP_SONG:
-                    result = await run_song_sync()
+                    result = await run_song_sync(
+                        target_id=job.get("target_id"), target=job.get("target")
+                    )
                 else:
-                    result = await run_table_sync(triggered_by=job["triggered_by"])
+                    result = await run_table_sync(
+                        triggered_by=job["triggered_by"],
+                        target_id=job.get("target_id"),
+                        target=job.get("target"),
+                    )
                 step["result"] = result
                 step["status"] = "DONE" if result.get("status") == "DONE" else "FAILED"
+                if step["status"] == "FAILED":
+                    step["error"] = result.get("log") or result.get("reason")
             except Exception as e:
                 logger.exception("작업 스텝 실패: job=%s step=%s", job["id"], step["name"])
                 step["status"] = "FAILED"

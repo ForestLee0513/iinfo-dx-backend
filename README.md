@@ -11,14 +11,14 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 - **httpx** + **BeautifulSoup4** (크롤링/파싱)
 - **supabase-py** (크롤링 결과 동기화)
 - **APScheduler** (주 1회 스케줄링)
-- **Redis** (크롤 작업 상태 저장 — 서버 재기동 시 이어하기, 스케줄 오버라이드)
+- **Redis** (크롤 작업 실행 상태 저장 — 서버 재기동 시 이어하기. 크롤 대상/스케줄은 Supabase에 영구 저장)
 
 ## 프로젝트 구조
 
 ```
 .
 ├── app/                     # 모듈러 모놀리식 (단일 앱, 모듈별 라우터를 /api/v1/{모듈}로 마운트)
-│   ├── main.py              # FastAPI 엔트리포인트 (web/songs-crawl/difficulty-crawl/admin/health 마운트 + 스케줄러 기동)
+│   ├── main.py              # FastAPI 엔트리포인트 (web/crawl/admin/health 마운트 + 스케줄러 기동)
 │   ├── core/
 │   │   └── config.py        # 환경설정 (.env 로드) — 전역 공유
 │   ├── common/              # 모듈 공유 코드
@@ -34,24 +34,21 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 │   │   └── endpoints/
 │   │       ├── tables.py    # 난이도표 목록/상세 (공개)
 │   │       └── me.py        # 내 정보 조회 (인증 필수)
-│   ├── songs_crawl/         # /songs-crawl/* : 곡 마스터 크롤링 (textage.cc)
-│   │   ├── router.py        # targets/preview (공개)
-│   │   ├── pipeline.py      # 크롤링 → 동기화 파이프라인 (run_song_sync)
-│   │   ├── sync.py          # sync_song_master RPC 호출(쓰기, service role)
+│   ├── api/v1/endpoints/crawl.py  # /crawl/* : 통합 크롤 API
+│   │                         #   진단(targets/preview, 공개) + 수동 실행/스케줄(jobs/schedules, ADMIN)
+│   ├── songs_crawl/         # 곡 마스터 크롤링 도메인 로직 (textage.cc)
+│   │   ├── pipeline.py      # 크롤링 → 동기화 파이프라인 (run_song_sync, target/target_id 지정 가능)
 │   │   └── crawlers/        # 곡 마스터 크롤러 레지스트리 (base/textage)
-│   ├── difficulty_crawl/    # /difficulty-crawl/* : 난이도표 크롤링
-│   │   ├── router.py        # targets/preview (공개)
-│   │   ├── pipeline.py      # 크롤링 → 동기화 파이프라인 (run_table_sync)
-│   │   ├── sync.py          # sync_table_result RPC 호출(쓰기, service role)
-│   │   ├── scheduler.py     # APScheduler 주간 크론 (곡 마스터 → 난이도표 순차 실행)
+│   ├── difficulty_crawl/    # 난이도표 크롤링 도메인 로직
+│   │   ├── pipeline.py      # 크롤링 → 동기화 파이프라인 (run_table_sync, target/target_id 지정 가능)
+│   │   ├── scheduler.py     # APScheduler 대상별 스케줄 (요일·시각 여러 개 지정 가능)
 │   │   ├── crawlers/        # 크롤러 레지스트리 (base/sheet_5ch/numeric_example)
 │   │   └── parsers/         # pubhtml 파싱 (지력/개인차 판별)
-│   └── admin/               # /admin/* : 어드민 API (별도 어드민 FE 전용, ADMIN 역할 보호)
-│       ├── router.py        # 크롤 수동 실행/작업 조회 + 스케줄 조회/변경
-│       ├── jobs.py          # 작업 실행기 (Redis 체크포인트 — 재기동 시 이어하기)
-│       ├── store.py         # Redis 저장소 (작업 상태/스케줄 오버라이드)
-│       ├── deps.py          # 어드민 인증 (AdminUser — app_metadata.role == "ADMIN")
-│       └── schemas.py       # 작업/스케줄 요청·응답 모델
+│   └── admin/               # /admin/* : 어드민 회원 관리 API (별도 어드민 FE 전용, ADMIN 역할 보호)
+│       ├── jobs.py          # 크롤 작업 실행기 (Redis 체크포인트 — 재기동 시 이어하기)
+│       ├── store.py         # 저장소 파사드 (작업 상태=Redis, 대상/스케줄=Supabase)
+│       ├── targets.py       # 크롤 대상 레지스트리 (Supabase crawl_targets → target_key, env 없음)
+│       └── deps.py          # 어드민 인증 (AdminUser — app_metadata.role == "ADMIN")
 ├── supabase/
 │   └── migrations/          # Supabase 마이그레이션 SQL
 ├── requirements.txt
@@ -87,11 +84,10 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 단일 앱(모듈러 모놀리식)에 모듈별 라우터를 `/api/v1/{모듈}` 프리픽스로 마운트합니다 (`app/main.py`):
 
 ```python
-app.include_router(health.router,           prefix="/api/v1/health",           tags=["Health"])
-app.include_router(web_router,              prefix="/api/v1/web",              tags=["Web"])
-app.include_router(songs_crawl_router,      prefix="/api/v1/songs-crawl",      tags=["SongsCrawl"])
-app.include_router(difficulty_crawl_router, prefix="/api/v1/difficulty-crawl", tags=["DifficultyCrawl"])
-app.include_router(admin_router,            prefix="/api/v1/admin",            tags=["Admin"])  # 어드민 FE 전용
+app.include_router(health.router,  prefix="/api/v1/health", tags=["Health"])
+app.include_router(web_router,     prefix="/api/v1/web",    tags=["Web"])
+app.include_router(crawl_router,   prefix="/api/v1/crawl",  tags=["Crawl"])  # 진단(공개) + 잡/스케줄(ADMIN)
+app.include_router(admin_router,   prefix="/api/v1/admin",  tags=["Admin"])  # 어드민 FE 전용 회원 관리
 ```
 
 인증이 필요한 엔드포인트는 `CurrentUser` 타입을 파라미터로 받습니다 (라우터 전체를 보호하려면 `dependencies=[Depends(get_current_user)]`):
@@ -110,37 +106,43 @@ def read_current_user(current_user: CurrentUser):
 | `GET /api/v1/web/tables` | 공개 |
 | `GET /api/v1/web/tables/{slug}` | 공개 |
 | `GET /api/v1/web/me` | 인증 필수 |
-| `GET /api/v1/songs-crawl/targets` | 공개 |
-| `GET /api/v1/songs-crawl/preview` | 공개 |
-| `GET /api/v1/difficulty-crawl/targets` | 공개 |
-| `POST /api/v1/difficulty-crawl/preview` | 공개 |
-| `POST /api/v1/admin/crawl/jobs` | 어드민 (인증 + `app_metadata.role == "ADMIN"`) |
-| `GET /api/v1/admin/crawl/jobs` | 어드민 |
-| `GET /api/v1/admin/crawl/jobs/{id}` | 어드민 |
-| `GET /api/v1/admin/crawl/schedule` | 어드민 |
-| `PUT /api/v1/admin/crawl/schedule` | 어드민 |
+| `GET /api/v1/crawl/targets` | 공개 |
+| `POST /api/v1/crawl/preview` | 공개 |
+| `POST /api/v1/crawl/targets` | 어드민 (인증 + `app_metadata.role == "ADMIN"`) |
+| `GET /api/v1/crawl/targets/{target_key}` | 어드민 |
+| `PUT /api/v1/crawl/targets/{target_key}` | 어드민 |
+| `DELETE /api/v1/crawl/targets/{target_key}` | 어드민 |
+| `POST /api/v1/crawl/jobs` | 어드민 |
+| `GET /api/v1/crawl/jobs` | 어드민 |
+| `GET /api/v1/crawl/jobs/{id}` | 어드민 |
+| `GET /api/v1/crawl/schedules` | 어드민 |
+| `GET /api/v1/crawl/schedules/{target_key}` | 어드민 |
+| `PUT /api/v1/crawl/schedules/{target_key}` | 어드민 |
+| `DELETE /api/v1/crawl/schedules/{target_key}` | 어드민 |
+
+> **리버스 프록시 참고**: `GET /api/v1/crawl/targets`, `/api/v1/crawl/preview`는 공개 스펙(`/docs`)에도 노출되는 진단용 엔드포인트라 공개 도메인에 열어둬도 된다. 반면 대상 CRUD(`POST/GET/PUT/DELETE /api/v1/crawl/targets/*` — 목록 GET 제외), `POST/GET /api/v1/crawl/jobs*`, `GET/PUT/DELETE /api/v1/crawl/schedules*`는 인증(ADMIN)이 걸려 있어도 어드민 전용 쓰기/작업 API이므로, `/internal/*`·`/api/v1/admin/*`과 동일하게 공개 도메인에서는 차단하고 내부망/어드민 도메인에서만 접근하게 구성할 것.
 
 ## 크롤링 & 주간 동기화
 
-곡 마스터(textage.cc)와 난이도표를 크롤링해 Supabase에 반영하는 파이프라인입니다. 반영은 **주간 스케줄러** 또는 **어드민 API의 수동 실행**(`POST /api/v1/admin/crawl/jobs`)으로 이뤄집니다. 크롤 모듈(songs-crawl/difficulty-crawl) 자체에는 수동 트리거 엔드포인트가 없습니다. 프론트엔드는 공개 `GET /api/v1/web/tables` 로 결과를 조회합니다.
+곡 마스터(textage.cc)와 난이도표를 크롤링해 Supabase에 반영하는 파이프라인입니다. 반영은 **대상별 스케줄** 또는 **`POST /api/v1/crawl/jobs`의 수동 실행**으로 이뤄집니다. 수동 실행은 등록된 대상(`target_id`)을 참조하거나, `target`으로 크롤 대상 설정(crawler + url 등)을 body에 직접 내려 등록 여부와 무관하게 즉시 크롤+동기화할 수도 있습니다. 프론트엔드는 공개 `GET /api/v1/web/tables` 로 결과를 조회합니다.
 
-주간 스케줄러 하나가 **곡 마스터 → 난이도표** 순서로 실행합니다. 순서는 시간차가 아니라 코드로 보장되며, 곡 마스터가 실패해도 난이도표 동기화는 기존 곡 마스터 기준으로 계속 진행합니다.
+**크롤 대상 자체(어떤 크롤러로 어떤 URL을 긁을지)와 대상별 스케줄 모두 env가 아니라 어드민 API(`POST /api/v1/crawl/targets`, `PUT /api/v1/crawl/schedules/{target_key}`)로 등록합니다.** 대상/스케줄 정의는 **Supabase**(`crawl_targets`/`crawl_schedules` 테이블)에 영구 저장되며 env 폴백이 없습니다 — Redis가 유실돼도 사라지지 않습니다(Redis는 이제 크롤 **작업 실행 상태**(체크포인트/재기동 이어하기)에만 쓰입니다). 스케줄은 **크롤 대상(곡 소스 하나, 난이도표 하나) 단위**로 설정하며, 대상 하나에 여러 (요일, 시각) 트리거를 지정할 수 있고 대상별로 독립적으로 실행됩니다 — "곡 마스터가 먼저" 순서는 더 이상 스케줄 단위로 보장되지 않지만, 파이프라인이 곡 마스터가 지연/실패해도 지난 곡 마스터 기준으로 난이도표 동기화를 진행하도록 이미 허용하므로 문제가 되지 않습니다.
 
 ```
-[APScheduler 주 1회 크론] ──→ run_weekly_sync
-    ① run_song_sync (곡 마스터)
-       → SONG_CRAWL_TARGETS 순회 → 타깃의 "crawler" 값으로 크롤러 선택·실행 (textage)
+[대상별 APScheduler job] ──→ run_target_sync(target_key, kind, target_id)
+    kind="song"  → run_song_sync(target_id)
+       → Supabase에 등록된(kind="song") 대상 중 해당 id → "crawler" 값으로 크롤러 선택·실행 (textage)
        → SongMasterResult 단위로 sync_song_master RPC 호출
        → versions/songs/charts upsert + 크롤에 없는 곡/채보 in_ac=false (단일 트랜잭션, 삭제 없음)
-    ② run_table_sync (난이도표)
-       → TABLE_CRAWL_TARGETS 순회 → 타깃의 "crawler" 값으로 크롤러 선택·실행
+    kind="table" → run_table_sync(target_id)
+       → Supabase에 등록된(kind="table") 대상 중 해당 id → "crawler" 값으로 크롤러 선택·실행
        → 표(TableResult) 단위로 sync_table_result RPC 호출
        → difficulty_tables upsert + difficulty_entries 전체 교체 + crawl_sync_logs 기록 (단일 트랜잭션)
 ```
 
 ### 1. Supabase 마이그레이션 적용
 
-`supabase/migrations/` 아래 SQL(`20260702000000_crawl_sync.sql`, `20260703000000_song_master.sql`)을 적용합니다. 두 방법 중 택 1:
+`supabase/migrations/` 아래 SQL을 적용합니다. `versions`/`songs`/`charts`(곡 마스터 원본 테이블)는 이 저장소의 마이그레이션으로 만들어진 적이 없고 이미 운영 중인 스키마를 그대로 사용합니다 — 곡 마스터 동기화 RPC(`20260718010000_song_master_sync.sql`), `songs.title` UNIQUE 제약 제거(`20260718020000_drop_songs_title_unique.sql` — IIDX 동명이곡 때문에 실제 운영 스키마에 있던 제약이 크롤 동기화를 막고 있었음), 크롤 대상/스케줄 테이블(`20260718000000_crawl_targets_schedules.sql`)만 이 저장소에서 관리합니다. **난이도표 쪽(`difficulty_tables`/`difficulty_entries`/`sync_table_result` RPC)은 아직 마이그레이션이 없어 별도로 준비해야 합니다** — 과거 커밋(`c4629a0`)에서 초안이 삭제된 뒤 재작성 대기 중. 두 방법 중 택 1:
 
 ```bash
 # 방법 A: Supabase CLI
@@ -150,32 +152,23 @@ supabase db push
 # 방법 B: Supabase 대시보드 > SQL Editor에 파일 내용 붙여넣고 실행
 ```
 
-생성되는 것: `difficulty_tables`(표 정의), `difficulty_entries`(곡 엔트리), `crawl_sync_logs`(동기화 이력), `sync_table_result` RPC + 곡 마스터용 `versions`/`songs`/`charts`, `sync_song_master` RPC. 데이터는 공개 읽기(RLS), 쓰기는 service role 전용입니다.
+이 저장소 마이그레이션으로 생성되는 것: `crawl_sync_logs`(동기화 이력) + `sync_song_master` RPC(곡 마스터 upsert — 이미 존재하는 `versions`/`songs`/`charts` 테이블에 반영), 그리고 `crawl_targets`(크롤 대상)/`crawl_schedules`(대상별 스케줄, `crawl_targets` 삭제 시 cascade 삭제). 모두 RLS 활성화 + service role 전용(별도 공개 read 정책 없음 — `user_bans`와 동일 패턴); 백엔드는 항상 service role 클라이언트로 접근합니다. `difficulty_tables`/`difficulty_entries`/`sync_table_result`는 아직 없음(위 참고).
 
 ### 2. 환경변수 설정
 
 ```dotenv
 SUPABASE_SERVICE_ROLE_KEY=eyJ...   # Project Settings > API > service_role
-SONG_CRAWL_TARGETS=[{"crawler":"textage"}]
-TABLE_CRAWL_TARGETS=[{"crawler":"5ch_sheet","url":"https://docs.google.com/spreadsheets/.../pubhtml","play_style":"SP","level":12}]
 ```
 
-### 3. 주간 스케줄
+크롤 대상(`SONG_CRAWL_TARGETS`/`TABLE_CRAWL_TARGETS`에 해당하던 값)은 더 이상 `.env`에 없습니다 — 서버 기동 후 `POST /api/v1/crawl/targets`로 등록합니다(아래 "크롤 API" 절 curl 예시 참고). 각 대상의 `id`는 같은 종류(곡/난이도표) 안에서 고유해야 합니다 — 대상별 스케줄 키(`song:<id>` / `table:<id>`)로 쓰입니다.
 
-서버 기동 시 APScheduler가 등록되며, 기본값은 **매주 월요일 05:00 (Asia/Seoul)** 입니다. `.env`로 변경할 수 있습니다:
+### 3. 크롤 대상 & 스케줄 (어드민 API)
 
-```dotenv
-CRAWL_SCHEDULE_ENABLED=true   # false로 끄기
-CRAWL_SCHEDULE_DAY=mon        # mon/tue/wed/thu/fri/sat/sun
-CRAWL_SCHEDULE_HOUR=5
-CRAWL_SCHEDULE_MINUTE=0
-```
+크롤 대상과 스케줄 모두 env가 아니라 **어드민 API에서** 설정하며 **Supabase**(`crawl_targets`, `crawl_schedules` 테이블)가 유일한 저장소입니다 — Redis가 유실돼도 사라지지 않습니다. 서버 배포 직후에는 등록된 대상도 스케줄도 없으므로, 어드민이 아래 API(또는 대시보드)로 대상을 먼저 등록하고 스케줄을 설정하기 전까지는 아무 것도 자동 실행되지 않습니다.
 
-어드민 API(`PUT /api/v1/admin/crawl/schedule`)로 변경하면 Redis에 저장되어 재기동 후에도 유지되며, 위 `.env` 기본값보다 우선합니다.
+## 크롤 API (`/api/v1/crawl/*`)
 
-## 어드민 API (별도 어드민 FE 전용)
-
-크롤 수동 실행과 스케줄 변경을 제공합니다. 모든 엔드포인트는 Supabase 토큰 인증에 더해 **계정의 `app_metadata.role`이 `ADMIN`** 이어야 합니다(미설정 계정은 `USER`로 취급되어 403).
+진단(공개)과 수동 실행/스케줄(ADMIN)을 하나의 라우터로 제공합니다. 잡/스케줄 엔드포인트는 Supabase 토큰 인증에 더해 **계정의 `app_metadata.role`이 `ADMIN`** 이어야 합니다(미설정 계정은 `USER`로 취급되어 403).
 
 ```dotenv
 CORS_ORIGINS=["http://localhost:3000"]   # 어드민 FE 오리진 (브라우저 호출 허용)
@@ -203,26 +196,62 @@ where email = 'admin@example.com';
 ```bash
 TOKEN="<supabase-access-token>"
 
-# 크롤 수동 실행 (scope: full=곡 마스터→난이도표 순차 | songs | tables)
-curl -X POST http://localhost:8000/api/v1/admin/crawl/jobs \
+# 크롤 대상 등록 (kind: song | table) — 이후 target_id/스케줄에서 이 id로 참조
+curl -X POST http://localhost:8000/api/v1/crawl/targets \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"kind": "table", "id": "5ch_sp12", "label": "5ch SP12", "crawler": "5ch_sheet", "url": "<pubhtml-url>", "play_style": "SP", "level": 12}'
+# → 201 + 대상 상세(url 등 포함). 같은 kind에 같은 id가 이미 있으면 409
+
+curl -X POST http://localhost:8000/api/v1/crawl/targets \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"kind": "song", "id": "textage", "label": "Textage", "crawler": "textage"}'
+
+# 대상 상세 조회(url 등 포함, ADMIN) / 수정 / 삭제(스케줄·job도 함께 정리)
+curl http://localhost:8000/api/v1/crawl/targets/table:5ch_sp12 -H "Authorization: Bearer $TOKEN"
+curl -X PUT http://localhost:8000/api/v1/crawl/targets/table:5ch_sp12 \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"label": "5ch SP12 (개편)", "crawler": "5ch_sheet", "url": "<new-pubhtml-url>", "play_style": "SP", "level": 12}'
+curl -X DELETE http://localhost:8000/api/v1/crawl/targets/table:5ch_sp12 -H "Authorization: Bearer $TOKEN"
+
+# 크롤 수동 실행 (scope: full=전체 대상 곡→난이도표 순차 | song | table)
+curl -X POST http://localhost:8000/api/v1/crawl/jobs \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"scope": "full"}'
 # → 202 + 작업 객체 (이미 실행 중이면 409)
 
-# 작업 목록 / 단건 조회 (FE는 이걸로 진행 상황 폴링)
-curl http://localhost:8000/api/v1/admin/crawl/jobs -H "Authorization: Bearer $TOKEN"
-curl http://localhost:8000/api/v1/admin/crawl/jobs/<job-id> -H "Authorization: Bearer $TOKEN"
-
-# 스케줄 조회 / 변경 (변경값은 Redis에 저장 → 재기동 후에도 유지)
-curl http://localhost:8000/api/v1/admin/crawl/schedule -H "Authorization: Bearer $TOKEN"
-curl -X PUT http://localhost:8000/api/v1/admin/crawl/schedule \
+# target_id — 등록된 대상(위에서 만든 id) 하나만 참조 실행
+curl -X POST http://localhost:8000/api/v1/crawl/jobs \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"enabled": true, "day": "wed", "hour": 3, "minute": 30}'
+  -d '{"scope": "table", "target_id": "5ch_sp12"}'
+
+# target — 크롤 대상을 body로 직접 지정 (등록 여부 무관, 즉시 크롤 + Supabase 반영)
+curl -X POST http://localhost:8000/api/v1/crawl/jobs \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"scope": "table", "target": {"crawler": "5ch_sheet", "url": "<pubhtml-url>", "play_style": "SP", "level": 12}}'
+
+# 작업 목록 / 단건 조회 (FE는 이걸로 진행 상황 폴링)
+curl http://localhost:8000/api/v1/crawl/jobs -H "Authorization: Bearer $TOKEN"
+curl http://localhost:8000/api/v1/crawl/jobs/<job-id> -H "Authorization: Bearer $TOKEN"
+
+# 크롤 대상 목록 (공개 — 대시보드 드롭다운 소스이자 등록된 크롤러 확인용)
+curl http://localhost:8000/api/v1/crawl/targets
+
+# 대상별 스케줄 조회 (전체 / 단건) — 스케줄은 등록된 대상(target_key)에만 걸 수 있다
+curl http://localhost:8000/api/v1/crawl/schedules -H "Authorization: Bearer $TOKEN"
+curl http://localhost:8000/api/v1/crawl/schedules/table:5ch_sp12 -H "Authorization: Bearer $TOKEN"
+
+# 대상별 스케줄 변경 — 한 대상에 여러 요일·시각 지정 가능 (Supabase에 영구 저장 → 재기동/Redis 유실 후에도 유지)
+curl -X PUT http://localhost:8000/api/v1/crawl/schedules/table:5ch_sp12 \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled": true, "triggers": [{"day": "mon", "hour": 3, "minute": 0}, {"day": "tue", "hour": 17, "minute": 0}]}'
+
+# 대상별 스케줄 삭제 (비활성으로 되돌리고 등록된 job 제거)
+curl -X DELETE http://localhost:8000/api/v1/crawl/schedules/table:5ch_sp12 -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 중단 시 이어하기 (Redis 체크포인트)
 
-작업은 스텝(`song_sync` → `table_sync`) 단위로 진행 상태를 Redis에 기록합니다. 서버가 실행 도중 중단되면 **재기동 시 완료되지 않은 스텝부터 자동으로 이어서 실행**합니다(크롤→RPC 반영은 upsert/전체 교체라 스텝 재실행이 안전). 주간 스케줄 실행도 같은 실행기를 거치므로 동일하게 이어하기가 적용됩니다. Redis는 AOF 영속화가 켜져 있어(`docker-compose.yml`) 호스트 재부팅 후에도 상태가 남습니다.
+작업은 스텝(`song_sync` → `table_sync`) 단위로 진행 상태를 Redis에 기록합니다. 서버가 실행 도중 중단되면 **재기동 시 완료되지 않은 스텝부터 자동으로 이어서 실행**합니다(크롤→RPC 반영은 upsert/전체 교체라 스텝 재실행이 안전). 스케줄 실행도 같은 실행기를 거치므로 동일하게 이어하기가 적용됩니다. Redis는 AOF 영속화가 켜져 있어(`docker-compose.yml`) 호스트 재부팅 후에도 상태가 남습니다.
 
 ### 4. 표 조회 / 미리보기
 
@@ -233,26 +262,23 @@ curl http://localhost:8000/api/v1/web/tables
 # 표 1개 + 엔트리 조회 (공개)
 curl http://localhost:8000/api/v1/web/tables/5ch-sp12-strength
 
-# 크롤러 목록 확인 (등록된 크롤러 이름)
-curl http://localhost:8000/api/v1/difficulty-crawl/targets
-
-# 선택한 크롤러로 미리보기 (Supabase 반영 없음, 공개)
-# 실제 크롤 경로를 그대로 태우므로 반환값 = 동기화될 표/엔트리
-curl -X POST http://localhost:8000/api/v1/difficulty-crawl/preview \
+# 선택한 크롤러로 미리보기 (Supabase 반영 없음, 공개) — 실제 크롤 경로를 그대로 태우므로 반환값 = 동기화될 내용
+curl -X POST http://localhost:8000/api/v1/crawl/preview \
   -H "Content-Type: application/json" \
-  -d '{"crawler": "5ch_sheet", "target": {"url": "<pubhtml-url>", "play_style": "SP", "level": 12}}'
+  -d '{"kind": "table", "crawler": "5ch_sheet", "target": {"url": "<pubhtml-url>", "play_style": "SP", "level": 12}}'
 
-# 곡 마스터 크롤 타깃 확인 / 미리보기 (textage SLOTS 검증용, Supabase 반영 없음)
-curl http://localhost:8000/api/v1/songs-crawl/targets
-curl "http://localhost:8000/api/v1/songs-crawl/preview?title=AA&limit=5"
+# 곡 마스터 미리보기 (textage SLOTS 검증용, Supabase 반영 없음)
+curl -X POST http://localhost:8000/api/v1/crawl/preview \
+  -H "Content-Type: application/json" \
+  -d '{"kind": "song", "crawler": "textage", "title": "AA"}'
 ```
 
 ### 새 난이도표 추가하기
 
 1. `app/services/difficulty_crawl/crawlers/`에 크롤러 클래스를 구현하고 `@register("이름")`을 붙입니다 (숫자형 표는 `numeric_example.py` 템플릿의 `_parse`만 구현).
-2. `.env`의 `TABLE_CRAWL_TARGETS`에 `{"crawler": "이름", ...설정}`을 추가합니다.
+2. `POST /api/v1/crawl/targets`로 `{"kind": "table", "id": "고유id", "label": "...", "crawler": "이름", ...설정}`을 등록합니다(위 curl 예시 참고).
 
-스키마/동기화 코드는 수정할 필요 없습니다. 곡 마스터 소스를 추가할 때도 동일한 패턴으로 `app/services/songs_crawl/crawlers/` + `SONG_CRAWL_TARGETS`만 수정합니다 (두 모듈은 레지스트리가 분리되어 있습니다).
+스키마/동기화 코드는 수정할 필요 없습니다. 곡 마스터 소스를 추가할 때도 동일한 패턴으로 `app/services/songs_crawl/crawlers/`에 크롤러를 구현하고 `POST /api/v1/crawl/targets`에 `{"kind": "song", ...}`을 등록합니다 (두 모듈은 레지스트리가 분리되어 있습니다).
 
 ## 사전 준비
 
