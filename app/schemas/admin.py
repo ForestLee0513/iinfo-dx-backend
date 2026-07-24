@@ -57,6 +57,7 @@ class AdminUserSummary(BaseModel):
     provider: str | None = None  # 가입 경로 ("google" | "email" 등)
     created_at: datetime  # 가입일자
     last_sign_in_at: datetime | None = None
+    role: UserRole = UserRole.USER  # 회원 역할 (프로필 행 없으면 USER)
     is_banned: bool  # 현재 정지 여부 (user_bans 활성 레코드 존재)
     ban_reason: str | None = None  # 정지 사유 (정지 중일 때만)
     ban_until: datetime | None = None  # 정지 만료 일시 (정지 중인데 None이면 영구 정지)
