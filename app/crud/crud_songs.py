@@ -1,7 +1,10 @@
-"""곡 마스터 동기화: SongMasterResult -> sync_song_master RPC (service role 전용).
+"""곡 마스터 CRUD — 동기화(쓰기) + 어드민 조회(읽기).
+
+- 쓰기: SongMasterResult -> sync_song_master RPC (service role 전용).
+- 읽기: 어드민 카탈로그 조회용 곡/채보/버전 조회 (crud_tables.py와 같은 읽기 역할).
 
 Supabase 파이썬 클라이언트는 동기식이므로 async 경로에서는
-asyncio.to_thread로 감싸서 호출한다 (pipeline.py 참고).
+asyncio.to_thread로 감싸서 호출한다 (pipeline.py / admin_catalog.py 참고).
 RPC 정의: supabase/migrations/20260718010000_song_master_sync.sql
 (versions/songs/charts 테이블: supabase/migrations/20260718005000_song_master_schema.sql —
 songs.version 컬럼명 등 실제 운영 스키마 기준으로 RPC를 작성함)
@@ -57,3 +60,87 @@ def sync_song_master(result: SongMasterResult) -> dict:
         _log(sb, result.source, None, "FAILED", str(e)[:2000])
         logger.exception("곡 마스터 동기화 실패 (%s)", result.source)
         return {"source": result.source, "status": "FAILED", "error": str(e)}
+
+
+# ── 어드민 조회(읽기) ─────────────────────────────────────
+
+# 목록 조회 시 채보는 제외하고 곡 메타데이터만 반환
+_SONG_LIST_COLUMNS = (
+    "id, textage_tag, title, series, genre, artist, bpm, version, in_ac, updated_at"
+)
+
+# 곡 목록 정렬 가능 컬럼 (곡은 단일 레벨/등급/레이팅이 없으므로 메타 컬럼만).
+# 화이트리스트로 임의 컬럼 정렬을 차단한다.
+SONG_SORT_COLUMNS = ("title", "version", "artist", "updated_at", "created_at")
+
+
+def _flatten_version(row: dict) -> dict:
+    """임베드된 versions 객체를 version_name 필드로 평탄화한다."""
+    ver = row.pop("versions", None)
+    row["version_name"] = ver["name"] if ver else None
+    return row
+
+
+def list_songs(
+    title: str | None,
+    version: int | None,
+    in_ac: bool | None,
+    page: int,
+    per_page: int,
+    sort: str = "title",
+    order: str = "asc",
+) -> dict:
+    """필터·페이지네이션·정렬을 적용한 곡 목록 (채보 제외).
+
+    sort는 SONG_SORT_COLUMNS 화이트리스트로 제한(벗어나면 title), order는 asc/desc.
+    반환: {"songs": [...], "total": n} — total은 필터 적용 후 전체 개수.
+    """
+    q = (
+        get_supabase()
+        .table("songs")
+        .select(f"{_SONG_LIST_COLUMNS}, versions(name)", count="exact")
+    )
+    if title:
+        q = q.ilike("title", f"%{title}%")
+    if version is not None:
+        q = q.eq("version", version)
+    if in_ac is not None:
+        q = q.eq("in_ac", in_ac)
+    sort_col = sort if sort in SONG_SORT_COLUMNS else "title"
+    start = (page - 1) * per_page
+    res = (
+        q.order(sort_col, desc=(order == "desc"))
+        .range(start, start + per_page - 1)
+        .execute()
+    )
+    songs = [_flatten_version(r) for r in res.data]
+    return {"songs": songs, "total": res.count or 0}
+
+
+def get_song(song_id: str) -> dict | None:
+    """곡 1개 + 채보 전체를 조회. 없으면 None.
+
+    charts는 song_id FK로 임베드해 한 번에 가져온다.
+    """
+    res = (
+        get_supabase()
+        .table("songs")
+        .select("*, versions(name), charts(*)")
+        .eq("id", song_id)
+        .limit(1)
+        .execute()
+    )
+    rows = res.data
+    return _flatten_version(rows[0]) if rows else None
+
+
+def list_versions() -> list[dict]:
+    """버전 목록 (곡 필터 드롭다운용), id 오름차순."""
+    res = (
+        get_supabase()
+        .table("versions")
+        .select("id, name, abbrev")
+        .order("id")
+        .execute()
+    )
+    return res.data

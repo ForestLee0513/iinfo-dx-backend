@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     admin,
     admin_auth,
+    admin_catalog,
     auth,
     crawl,
     health,
@@ -26,3 +27,5 @@ api_router.include_router(crawl.router, prefix="/crawl", tags=["Crawl"])
 # 어드민 API (인증 + ADMIN 역할, 회원 관리 전용)
 api_router.include_router(admin_auth.router, prefix="/admin/auth", tags=["AdminAuth"])
 api_router.include_router(admin.router, prefix="/admin", tags=["Admin"])
+# 어드민 카탈로그 조회 (등록된 서열표·곡 조회, 읽기 전용)
+api_router.include_router(admin_catalog.router, prefix="/admin", tags=["Admin Catalog"])
