@@ -1,7 +1,7 @@
 """Supabase 동기화(쓰기) — sync_table_result RPC 호출.
 
 공통 클라이언트(app.db.session.get_supabase)를 사용한다.
-스키마/RPC 정의: supabase/migrations/20260702000000_crawl_sync.sql
+스키마/RPC 정의: supabase/migrations/20260724000000_difficulty_table_sync.sql
 """
 
 import logging

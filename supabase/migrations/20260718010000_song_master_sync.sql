@@ -4,21 +4,12 @@
 -- 2026-07-07 커밋(c4629a0 "임시로 적용한 마이그레이션 sql 삭제")에서 곡 마스터/
 -- 크롤 동기화 관련 마이그레이션 파일이 저장소에서 삭제됐지만, 실제 Supabase에는
 -- sync_song_master RPC와 crawl_sync_logs 테이블이 없는 채로 남아 있었다
--- (곡 크롤링 시 PGRST202/PGRST205로 실패). versions/songs/charts 테이블은
--- 이미 존재하며 삭제됐던 초안과 컬럼명이 다르다 — 특히 songs.version_id가
--- 아니라 songs.version이다. 여기서는 기존 테이블 구조를 그대로 두고,
--- 없는 두 가지(RPC, crawl_sync_logs)만 실제 스키마에 맞춰 다시 만든다.
+-- (곡 크롤링 시 PGRST202/PGRST205로 실패). 여기서는 없는 두 가지(RPC,
+-- crawl_sync_logs)만 실제 스키마에 맞춰 다시 만든다.
 --
--- 실제 테이블 구조(참고, 여기서 재생성하지 않음):
---   versions(id smallint pk, name text, abbrev text)
---   songs(id uuid pk, title text unique, series text unique null,
---         textage_tag text unique null, genre, artist, bpm text,
---         version smallint references versions(id), in_ac bool,
---         created_at, updated_at)
---   charts(id uuid pk, song_id uuid references songs(id) on delete cascade,
---          play_style, difficulty, level smallint, notes int null,
---          in_ac bool, created_at, updated_at,
---          unique(song_id, play_style, difficulty))
+-- versions/songs/charts 테이블 자체는 20260718005000_song_master_schema.sql 에서
+-- 만든다(그 마이그레이션이 이 파일보다 먼저 실행됨). 특히 songs.version_id 가
+-- 아니라 songs.version(smallint)인 실제 컬럼명을 아래 RPC가 사용한다.
 -- ─────────────────────────────────────────────────────────────
 
 create table if not exists public.crawl_sync_logs (

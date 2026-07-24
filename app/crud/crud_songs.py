@@ -3,8 +3,8 @@
 Supabase 파이썬 클라이언트는 동기식이므로 async 경로에서는
 asyncio.to_thread로 감싸서 호출한다 (pipeline.py 참고).
 RPC 정의: supabase/migrations/20260718010000_song_master_sync.sql
-(versions/songs/charts 테이블 자체는 이 저장소 마이그레이션에 없음 — 이미 존재하는
-운영 스키마를 그대로 사용하며, songs.version 컬럼명 등 실제 컬럼명 기준으로 RPC를 작성함)
+(versions/songs/charts 테이블: supabase/migrations/20260718005000_song_master_schema.sql —
+songs.version 컬럼명 등 실제 운영 스키마 기준으로 RPC를 작성함)
 """
 
 from __future__ import annotations
