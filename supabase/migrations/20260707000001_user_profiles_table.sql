@@ -4,6 +4,8 @@
 -- raw_app_meta_data 대신 별도 테이블로 프로필 설정을 관리한다.
 -- is_public: 프로필 공개 여부 (기본 true)
 -- role: 서비스 권한 (기본 'USER', CHECK 제약으로 허용 값 강제)
+--       USER/ADMIN/SUPER_ADMIN — app/schemas/user.py UserRole 와 1:1.
+--       SUPER_ADMIN 은 개발자 본인 전용이라 부분 UNIQUE 인덱스로 최대 1명만 허용.
 --
 -- 신규 가입 시 트리거가 기본값 행을 자동 삽입한다.
 -- RLS: 본인은 읽기·수정 가능, 타인은 공개 프로필만 읽기 가능.
@@ -13,9 +15,14 @@ create table public.user_profiles (
     user_id    uuid        primary key references auth.users (id) on delete cascade,
     is_public  boolean     not null default true,
     role       text        not null default 'USER'
-                               check (role in ('USER', 'ADMIN')),
+                               check (role in ('USER', 'ADMIN', 'SUPER_ADMIN')),
     updated_at timestamptz not null default now()
 );
+
+-- SUPER_ADMIN(개발자 본인)은 최대 1명만 존재하도록 DB에서 강제한다.
+create unique index user_profiles_single_super_admin_idx
+    on public.user_profiles (role)
+    where role = 'SUPER_ADMIN';
 
 alter table public.user_profiles enable row level security;
 

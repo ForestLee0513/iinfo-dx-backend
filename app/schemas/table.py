@@ -1,7 +1,7 @@
 """web 모듈 응답 스키마.
 
 Supabase difficulty_tables / difficulty_entries 컬럼과 1:1로 대응한다.
-스키마 정의: supabase/migrations/20260702000000_crawl_sync.sql
+스키마 정의: supabase/migrations/20260724000000_difficulty_table_sync.sql
 """
 
 from datetime import datetime
