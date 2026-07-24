@@ -74,6 +74,46 @@ async def _target_or_404(target_key: str) -> dict:
     return target
 
 
+# 크롤러 종류와 무관하게 중복을 막을 식별 필드 (config 키 -> 사람이 읽는 이름)
+_DUP_FIELDS = {"id": "id", "label": "이름", "slug": "slug", "name": "표 이름"}
+
+
+def _norm(value) -> str | None:
+    """중복 비교용 정규화 — 앞뒤 공백 제거 + 대소문자 무시. 빈 값이면 None."""
+    return value.strip().casefold() if isinstance(value, str) and value.strip() else None
+
+
+def _apply_slug_default(config: dict) -> None:
+    """table 대상은 slug 생략 시 id를 slug로 채운다(공개 표 식별자 기본값).
+
+    song 대상은 slug 개념이 없어 건드리지 않는다. slug를 명시하면 그대로 존중한다.
+    """
+    if config.get("kind") == "table" and not (config.get("slug") or "").strip():
+        config["slug"] = config["id"]
+
+
+async def _reject_duplicate_target(config: dict, exclude_key: str | None = None) -> None:
+    """생성/수정하려는 대상이 기존 대상과 id/이름/slug/표 이름이 겹치면 409.
+
+    크롤러 종류를 가리지 않고 등록된 모든 대상과 대조한다(크롤러마다 config 키가
+    달라도 값이 실제로 존재하는 필드만 비교). exclude_key는 자기 자신(수정 시) 제외용.
+    """
+    for existing in await admin_targets.list_targets():
+        if existing["key"] == exclude_key:
+            continue
+        dupes = [
+            human
+            for field, human in _DUP_FIELDS.items()
+            if _norm(config.get(field)) is not None
+            and _norm(config.get(field)) == _norm(existing.get(field))
+        ]
+        if dupes:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"이미 존재하는 값입니다: {', '.join(dupes)} (대상 {existing['key']}와 충돌).",
+            )
+
+
 # ── 크롤 대상 (목록 공개, CRUD는 ADMIN) ────────────────
 
 
@@ -116,6 +156,8 @@ async def create_crawl_target(body: CrawlTargetCreateRequest, user: AdminUser):
             detail=f"이미 존재하는 크롤 대상입니다: {target_key}",
         )
     config = body.model_dump()
+    _apply_slug_default(config)
+    await _reject_duplicate_target(config)
     await store.save_target(target_key, config)
     logger.info("크롤 대상 생성: %s (by %s)", target_key, user.email)
     return CrawlTargetDetail(key=target_key, **config)
@@ -139,6 +181,8 @@ async def update_crawl_target(target_key: str, body: CrawlTargetUpdateRequest, u
             detail=f"등록되지 않은 크롤러: {body.crawler} (사용 가능: {list(registry)})",
         )
     config = {"kind": target["kind"], "id": target["id"], **body.model_dump()}
+    _apply_slug_default(config)
+    await _reject_duplicate_target(config, exclude_key=target_key)
     await store.save_target(target_key, config)
     logger.info("크롤 대상 수정: %s -> %s (by %s)", target_key, config, user.email)
     return CrawlTargetDetail(key=target_key, **config)
