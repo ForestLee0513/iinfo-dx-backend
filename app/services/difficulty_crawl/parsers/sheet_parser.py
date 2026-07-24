@@ -147,12 +147,18 @@ def parse_sheet(html: str, level: int) -> dict[str, list]:
     지력표/개인차표를 나누지 않고 하나로 합치되, 각 곡 엔트리에
     table_type("STRENGTH"=지력 / "PERSONAL"=개인차)을 담아 구분한다.
 
-    반환 구조:
+    반환 dict의 **키 순서는 시트에 등급 행이 등장한 순서(위→아래)를 보존**한다.
+    (파이썬 dict는 삽입 순서를 유지하므로, 데이터행을 위에서 아래로 순회하며
+    처음 만난 등급 순으로 키가 쌓인다.) 크롤러는 이 순서를 그대로 TableDef.grades로
+    사용할 수 있어, 등급 목록을 하드코딩할 필요가 없다. 즉 시트에 새 티어
+    (예: B+, C+)가 추가돼도 자동으로 반영된다.
+
+    반환 구조 (키는 시트 순서 = 예: F, E, D, C, B, B+, A, A+, S, S+):
     {
-      "S+": [ {title, series, difficulty, level, grade, table_type}, ... ],
-      "S":  [ ... ],
-      "A":  [ ... ],
+      "F":  [ {title, series, difficulty, level, grade, table_type}, ... ],
+      "E":  [ ... ],
       ...
+      "S+": [ ... ],
     }
 
     좌표 기준:
