@@ -6,7 +6,7 @@ from app.core.config import settings
 from app.services.difficulty_crawl.crawlers.base import DEFAULT_HEADERS, TableDef, TableResult, register
 from app.services.difficulty_crawl.parsers.sheet_parser import parse_sheet
 
-GRADES_5CH = ["F", "E", "D", "C", "B", "A", "S", "S+"]
+GRADES_5CH = ["F", "E", "D", "C", "B", "B+", "A", "A+", "S", "S+"]
 
 
 @register("5ch_sheet")
