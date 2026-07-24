@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.services.difficulty_crawl.crawlers.base import DEFAULT_HEADERS, TableDef, TableResult, register
 
 
-@register("numeric_json")
+# @register("numeric_json")
 class NumericJsonCrawler:
     """
     숫자 서열값(예: 12.3)을 쓰는 표용 템플릿.
