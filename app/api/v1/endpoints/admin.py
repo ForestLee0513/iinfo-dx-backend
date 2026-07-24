@@ -73,14 +73,24 @@ async def list_users(
     is_banned: bool | None = Query(
         None, description="정지 여부 필터 — true=정지 중, false=활성(정지 아님)"
     ),
+    role: UserRole | None = Query(
+        None, description="역할 필터 (USER | ADMIN | SUPER_ADMIN)"
+    ),
 ):
     """회원 목록 조회 — auth.users 직접 조회 (admin_list_users RPC).
 
-    이메일 부분 일치 / 가입 경로 / 정지 여부 필터와 페이지네이션을 DB에서
-    한 번에 처리한다. total은 필터 적용 후 개수.
+    이메일 부분 일치 / 가입 경로 / 정지 여부 / 역할 필터와 페이지네이션을 DB에서
+    한 번에 처리한다. 각 회원의 역할(role)이 포함되므로 권한 관리 화면은 상세를
+    조회하지 않고 이 목록만으로 역할을 파악할 수 있다. total은 필터 적용 후 개수.
     """
     result = await asyncio.to_thread(
-        crud_users.list_users, email, provider, is_banned, page, per_page
+        crud_users.list_users,
+        email,
+        provider,
+        is_banned,
+        role.value if role else None,
+        page,
+        per_page,
     )
     return AdminUserListResponse(
         users=result["users"],
@@ -105,6 +115,7 @@ async def get_user_detail(user_id: str, _: AdminUser):
     profile = UserProfileDetail(**profile_row) if profile_row else UserProfileDetail()
     return AdminUserDetail(
         **_user_summary_fields(user, active_ban),
+        role=profile.role,  # 목록 응답과 동일하게 최상위 role도 채운다
         profile=profile,
         active_ban=active_ban,
     )

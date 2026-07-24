@@ -7,6 +7,7 @@ def list_users(
     email: str | None,
     provider: str | None,
     is_banned: bool | None,
+    role: str | None,
     page: int,
     per_page: int,
 ) -> dict:
@@ -21,6 +22,7 @@ def list_users(
             "p_email": email,
             "p_provider": provider,
             "p_is_banned": is_banned,
+            "p_role": role,
             "p_page": page,
             "p_per_page": per_page,
         },
