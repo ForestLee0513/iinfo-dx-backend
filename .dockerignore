@@ -1,6 +1,8 @@
 .git
 .gitignore
 .omc
+.claude
+CLAUDE.md
 .venv
 venv
 __pycache__
