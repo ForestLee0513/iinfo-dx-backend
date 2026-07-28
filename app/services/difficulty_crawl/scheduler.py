@@ -1,8 +1,7 @@
 """크롤 대상별 스케줄러 (APScheduler) — 유일한 스케줄러.
 
-스케줄은 env가 아니라 어드민 대시보드(PUT /crawl/schedules/{target_key})에서
-크롤 대상(song/table target) 하나하나에 대해 설정하며 Supabase(crawl_schedules 테이블)에
-영구 저장된다(Redis가 유실돼도 사라지지 않음). 대상 하나에 여러 (요일, 시각) 트리거를
+스케줄은 어드민 대시보드(PUT /crawl/schedules/{target_key})에서 크롤 대상(song/table
+target) 하나하나에 대해 설정하며 Supabase(crawl_schedules 테이블)에 영구 저장된다. 대상 하나에 여러 (요일, 시각) 트리거를
 지정할 수 있고(OrTrigger로 하나의 job에 결합), 대상별로 독립적으로 켜고 끌 수 있다.
 
 곡 마스터와 난이도표는 이제 서로 다른 스케줄로 독립 실행될 수 있다 — "곡 마스터가

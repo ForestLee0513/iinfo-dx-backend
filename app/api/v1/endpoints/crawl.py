@@ -2,8 +2,8 @@
 
 - GET  /targets   : 크롤 대상 + 등록된 크롤러 목록 (공개, 읽기 전용)
 - POST /targets, GET·PUT·DELETE /targets/{target_key} : 크롤 대상 CRUD (ADMIN)
-  대상/스케줄은 Supabase(crawl_targets/crawl_schedules 테이블)에 영구 저장되며 env 폴백이
-  없다 — 여기 등록해야 잡/스케줄에서 참조 가능 (Redis가 유실돼도 사라지지 않는다).
+  대상/스케줄은 Supabase(crawl_targets/crawl_schedules 테이블)에 영구 저장된다
+  — 여기 등록해야 잡/스케줄에서 참조 가능하다.
 - POST /preview   : 선택한 크롤러로 미리보기 — Supabase 반영 없음 (공개, 읽기 전용)
 - POST /jobs      : 크롤 동기화 작업 생성 — 즉시 202, FE는 폴링으로 확인 (ADMIN)
                     scope="song"/"table" + target_id(등록된 대상 참조) 또는

@@ -44,13 +44,13 @@ class Settings(BaseSettings):
     REQUEST_TIMEOUT: int = 15
     MAX_CONCURRENT: int = 10
 
-    # 크롤 대상(곡 마스터/난이도표)과 스케줄은 env가 아니라 어드민 API로 관리하며
-    # Redis(crawl:targets, crawl:schedules 해시)가 유일한 저장소다 — env 폴백 없음.
+    # 크롤 대상(곡 마스터/난이도표)과 스케줄은 어드민 API로 관리하며 Supabase
+    # (crawl_targets, crawl_schedules 테이블)에 저장된다.
     # 대상 등록: POST /api/v1/crawl/targets. 스케줄 설정: PUT /api/v1/crawl/schedules/{target_key}.
     # 배포 직후에는 등록된 대상/스케줄이 하나도 없으므로 어드민이 등록하기 전까지
     # 아무 것도 자동 크롤되지 않는다.
 
-    # Redis — 크롤 작업 상태(재기동 시 이어하기) + 대상별 스케줄 저장
+    # Redis — 크롤 작업 실행 상태(재기동 시 이어하기)
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # 별도 FE(클라이언트/어드민) 오리진 CORS 허용 목록 (.env에서 JSON 배열 한 줄)

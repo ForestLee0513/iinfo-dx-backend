@@ -47,7 +47,7 @@ FastAPI 기반 백엔드입니다. 로컬 실행과 Docker 실행을 모두 지�
 │   └── admin/               # /admin/* : 어드민 회원 관리 API (별도 어드민 FE 전용, ADMIN 역할 보호)
 │       ├── jobs.py          # 크롤 작업 실행기 (Redis 체크포인트 — 재기동 시 이어하기)
 │       ├── store.py         # 저장소 파사드 (작업 상태=Redis, 대상/스케줄=Supabase)
-│       ├── targets.py       # 크롤 대상 레지스트리 (Supabase crawl_targets → target_key, env 없음)
+│       ├── targets.py       # 크롤 대상 레지스트리 (Supabase crawl_targets → target_key)
 │       └── deps.py          # 어드민 인증 (AdminUser — app_metadata.role == "ADMIN")
 ├── supabase/
 │   └── migrations/          # Supabase 마이그레이션 SQL
@@ -126,7 +126,7 @@ def read_current_user(current_user: CurrentUser):
 
 곡 마스터(textage.cc)와 난이도표를 크롤링해 Supabase에 반영하는 파이프라인입니다. 반영은 **대상별 스케줄** 또는 **`POST /api/v1/crawl/jobs`의 수동 실행**으로 이뤄집니다. 수동 실행은 등록된 대상(`target_id`)을 참조하거나, `target`으로 크롤 대상 설정(crawler + url 등)을 body에 직접 내려 등록 여부와 무관하게 즉시 크롤+동기화할 수도 있습니다. 프론트엔드는 공개 `GET /api/v1/web/tables` 로 결과를 조회합니다.
 
-**크롤 대상 자체(어떤 크롤러로 어떤 URL을 긁을지)와 대상별 스케줄 모두 env가 아니라 어드민 API(`POST /api/v1/crawl/targets`, `PUT /api/v1/crawl/schedules/{target_key}`)로 등록합니다.** 대상/스케줄 정의는 **Supabase**(`crawl_targets`/`crawl_schedules` 테이블)에 영구 저장되며 env 폴백이 없습니다 — Redis가 유실돼도 사라지지 않습니다(Redis는 이제 크롤 **작업 실행 상태**(체크포인트/재기동 이어하기)에만 쓰입니다). 스케줄은 **크롤 대상(곡 소스 하나, 난이도표 하나) 단위**로 설정하며, 대상 하나에 여러 (요일, 시각) 트리거를 지정할 수 있고 대상별로 독립적으로 실행됩니다 — "곡 마스터가 먼저" 순서는 더 이상 스케줄 단위로 보장되지 않지만, 파이프라인이 곡 마스터가 지연/실패해도 지난 곡 마스터 기준으로 난이도표 동기화를 진행하도록 이미 허용하므로 문제가 되지 않습니다.
+**크롤 대상 자체(어떤 크롤러로 어떤 URL을 긁을지)와 대상별 스케줄 모두 어드민 API(`POST /api/v1/crawl/targets`, `PUT /api/v1/crawl/schedules/{target_key}`)로 등록합니다.** 대상/스케줄 정의는 **Supabase**(`crawl_targets`/`crawl_schedules` 테이블)에 영구 저장됩니다(Redis는 크롤 **작업 실행 상태**(체크포인트/재기동 이어하기)에만 쓰입니다). 스케줄은 **크롤 대상(곡 소스 하나, 난이도표 하나) 단위**로 설정하며, 대상 하나에 여러 (요일, 시각) 트리거를 지정할 수 있고 대상별로 독립적으로 실행됩니다 — "곡 마스터가 먼저" 순서는 더 이상 스케줄 단위로 보장되지 않지만, 파이프라인이 곡 마스터가 지연/실패해도 지난 곡 마스터 기준으로 난이도표 동기화를 진행하도록 이미 허용하므로 문제가 되지 않습니다.
 
 ```
 [대상별 APScheduler job] ──→ run_target_sync(target_key, kind, target_id)
@@ -160,11 +160,11 @@ supabase db push
 SUPABASE_SERVICE_ROLE_KEY=eyJ...   # Project Settings > API > service_role
 ```
 
-크롤 대상(`SONG_CRAWL_TARGETS`/`TABLE_CRAWL_TARGETS`에 해당하던 값)은 더 이상 `.env`에 없습니다 — 서버 기동 후 `POST /api/v1/crawl/targets`로 등록합니다(아래 "크롤 API" 절 curl 예시 참고). 각 대상의 `id`는 같은 종류(곡/난이도표) 안에서 고유해야 합니다 — 대상별 스케줄 키(`song:<id>` / `table:<id>`)로 쓰입니다.
+크롤 대상은 서버 기동 후 `POST /api/v1/crawl/targets`로 등록합니다(아래 "크롤 API" 절 curl 예시 참고). 각 대상의 `id`는 같은 종류(곡/난이도표) 안에서 고유해야 합니다 — 대상별 스케줄 키(`song:<id>` / `table:<id>`)로 쓰입니다.
 
 ### 3. 크롤 대상 & 스케줄 (어드민 API)
 
-크롤 대상과 스케줄 모두 env가 아니라 **어드민 API에서** 설정하며 **Supabase**(`crawl_targets`, `crawl_schedules` 테이블)가 유일한 저장소입니다 — Redis가 유실돼도 사라지지 않습니다. 서버 배포 직후에는 등록된 대상도 스케줄도 없으므로, 어드민이 아래 API(또는 대시보드)로 대상을 먼저 등록하고 스케줄을 설정하기 전까지는 아무 것도 자동 실행되지 않습니다.
+크롤 대상과 스케줄 모두 **어드민 API에서** 설정하며 **Supabase**(`crawl_targets`, `crawl_schedules` 테이블)가 유일한 저장소입니다. 서버 배포 직후에는 등록된 대상도 스케줄도 없으므로, 어드민이 아래 API(또는 대시보드)로 대상을 먼저 등록하고 스케줄을 설정하기 전까지는 아무 것도 자동 실행되지 않습니다.
 
 ## 크롤 API (`/api/v1/crawl/*`)
 
