@@ -49,6 +49,27 @@ class ProfileResponse(BaseModel):
     is_mine: bool = False
     email: str | None = None
     provider: str | None = None
+    followers_count: int = 0
+    following_count: int = 0
+    # 익명 요청이거나 본인 프로필을 볼 때는 의미가 없으므로 None
+    is_following: bool | None = None
+
+
+class FollowUserSummary(BaseModel):
+    """팔로워/팔로잉 목록의 사용자 1명 요약."""
+
+    id: str
+    handle: str | None = None
+    profile_image_url: str | None = None
+
+
+class FollowListResponse(BaseModel):
+    """GET /web/profile/{identifier}/followers, /following 공통 응답."""
+
+    users: list[FollowUserSummary]
+    page: int
+    per_page: int
+    total: int
 
 
 class ProfileUpdateRequest(BaseModel):
