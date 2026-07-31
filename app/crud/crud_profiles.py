@@ -79,6 +79,23 @@ def get_profile_row_by_handle(handle: str) -> dict | None:
     return result.data if result and result.data else None
 
 
+def get_profile_summaries(user_ids: list[str]) -> dict[str, dict]:
+    """팔로워/팔로잉 목록 렌더링용 — user_id로 색인한 {handle, profile_image_url} 맵.
+
+    N+1 조회를 피하려고 IN절로 한 번에 가져온다. 없는 id는 결과에서 빠진다.
+    """
+    if not user_ids:
+        return {}
+    sb = get_supabase()
+    result = (
+        sb.table("user_profiles")
+        .select("user_id, handle, profile_image_url")
+        .in_("user_id", user_ids)
+        .execute()
+    )
+    return {row["user_id"]: row for row in (result.data or [])}
+
+
 def update_editable_fields(
     user_id: str,
     *,
