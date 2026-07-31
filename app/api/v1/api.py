@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     auth,
     crawl,
     health,
+    profile,
     tables,
 )
 
@@ -22,6 +23,7 @@ api_router.include_router(health.router, prefix="/health", tags=["Health"])
 # 사용자 client API — 기존 /web 네임스페이스 유지
 api_router.include_router(tables.router, prefix="/web/tables", tags=["Web"])
 api_router.include_router(auth.router, prefix="/web/auth", tags=["Web"])
+api_router.include_router(profile.router, prefix="/web/profile", tags=["Web"])
 # 크롤 통합 API — 진단(targets/preview, 공개) + 수동 실행/스케줄(jobs/schedules, ADMIN)
 api_router.include_router(crawl.router, prefix="/crawl", tags=["Crawl"])
 # 어드민 API (인증 + ADMIN 역할, 회원 관리 전용)

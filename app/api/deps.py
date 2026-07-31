@@ -10,6 +10,7 @@ app_metadata.role로 처리한다(README '어드민 권한 부여' 참고).
 """
 
 import asyncio
+from dataclasses import dataclass
 from typing import Annotated, Callable
 
 import jwt
@@ -64,6 +65,44 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[AuthUser, Depends(get_current_user)]
+
+
+@dataclass
+class TokenIdentity:
+    """토큰 클레임만으로 구성한 최소 신원 정보 — DB 조회(프로필/밴)는 하지 않는다."""
+
+    id: str
+    email: str | None
+    provider: str | None
+
+
+async def get_optional_identity(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(bearer_scheme)
+    ],
+) -> TokenIdentity | None:
+    """공개 엔드포인트에서 '요청자 본인인지'만 곁들이고 싶을 때 쓰는 옵셔널 인증.
+
+    Authorization 헤더가 없거나, 있어도 검증에 실패(만료·위조 등)하면 인증
+    실패로 막지 않고 익명(None)으로 취급한다 — 이 의존성을 쓰는 엔드포인트는
+    토큰 없이도 정상 동작해야 하는 공개 API이기 때문이다. get_current_user와
+    달리 프로필/밴 조회를 하지 않아 익명 트래픽에 추가 DB 왕복이 없다.
+    """
+    if credentials is None:
+        return None
+    try:
+        payload = decode_token(credentials.credentials)
+    except jwt.PyJWTError:
+        return None
+    app_metadata = payload.get("app_metadata") or {}
+    return TokenIdentity(
+        id=payload["sub"],
+        email=payload.get("email"),
+        provider=app_metadata.get("provider"),
+    )
+
+
+OptionalIdentity = Annotated[TokenIdentity | None, Depends(get_optional_identity)]
 
 
 def require_role(required: UserRole) -> Callable[..., AuthUser]:
