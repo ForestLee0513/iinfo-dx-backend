@@ -14,9 +14,15 @@ import jwt
 from fastapi.security import HTTPBearer
 
 from app.core.config import settings
-from app.schemas.user import UserRole
+from app.schemas.account.user import UserRole
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+# 클럭 스큐(서버·컨테이너 시계 오차) 허용치(초). Docker Desktop 등에서 슬립/재개
+# 후 컨테이너 시계가 살짝 어긋나면 방금 발급된 토큰의 iat/nbf가 "미래"로 보여
+# 검증이 간헐적으로 실패한다("The token is not yet valid"). 몇 초 여유를 둬
+# 유효한 토큰이 시계 오차로 거절되지 않게 한다(만료 판정에도 동일 여유 적용).
+_CLOCK_SKEW_LEEWAY = 30
 
 
 @lru_cache
@@ -49,6 +55,7 @@ def decode_token(token: str) -> dict:
             algorithms=["HS256"],
             audience="authenticated",
             issuer=issuer,
+            leeway=_CLOCK_SKEW_LEEWAY,
         )
     # 권장 방식: JWKS 공개 키(RS256/ES256) 검증
     signing_key = _jwks_client().get_signing_key_from_jwt(token)
@@ -58,6 +65,7 @@ def decode_token(token: str) -> dict:
         algorithms=["RS256", "ES256"],
         audience="authenticated",
         issuer=issuer,
+        leeway=_CLOCK_SKEW_LEEWAY,
     )
 
 
