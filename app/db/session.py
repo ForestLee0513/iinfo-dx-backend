@@ -3,13 +3,23 @@
 service role 키를 사용하므로 RLS를 우회한다. 이 키는 절대 클라이언트에
 노출하면 안 되며 백엔드 환경변수로만 관리한다.
 web(읽기) · crawl(쓰기) 서비스가 공통으로 사용한다.
+
+스키마가 둘로 나뉘어 있어(공통 계정 = public, IIDX 서비스 = iidx) 스키마별 전용
+클라이언트를 둔다:
+  - get_supabase()      : public (auth 계정 계층 — profiles/user_bans/user_follows, RPC admin_list_users)
+  - get_supabase_svc()  : iidx   (곡/채보/버전/난이도표 + 서비스 프로필 + 크롤 운영
+                                   테이블(crawl_*) + 동기화 RPC)
+
+각 클라이언트는 생성 시점에 기본 스키마를 고정한다(ClientOptions.schema). 이렇게
+하면 스키마 헤더가 요청마다 바뀌지 않아, lru_cache로 공유되는 싱글턴을 FastAPI
+스레드풀에서 동시에 써도 안전하다(전역 헤더를 뮤테이트하는 .schema() 방식과 대비).
 """
 
 import logging
 from functools import lru_cache
 
 import httpx
-from supabase import Client, create_client
+from supabase import Client, ClientOptions, create_client
 
 from app.core.config import settings
 
@@ -48,12 +58,30 @@ def _install_disconnect_retry(session: httpx.Client) -> None:
     session.request = request_with_retry
 
 
-@lru_cache
-def get_supabase() -> Client:
+def _create_client(schema: str) -> Client:
+    """지정 스키마를 기본값으로 고정한 service-role 클라이언트를 만든다."""
     if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_ROLE_KEY:
         raise RuntimeError(
             "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 환경변수가 필요합니다"
         )
-    client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+    client = create_client(
+        settings.SUPABASE_URL,
+        settings.SUPABASE_SERVICE_ROLE_KEY,
+        options=ClientOptions(schema=schema),
+    )
     _install_disconnect_retry(client.postgrest.session)
     return client
+
+
+@lru_cache
+def get_supabase() -> Client:
+    """public 스키마 클라이언트 — 계정 계층(profiles/user_bans/user_follows)과
+    public에 정의된 RPC(admin_list_users) 접근용."""
+    return _create_client("public")
+
+
+@lru_cache
+def get_supabase_svc() -> Client:
+    """iidx 스키마 클라이언트 — 곡/채보/버전/난이도표/서비스 프로필, 크롤 운영
+    테이블(crawl_targets/crawl_schedules/crawl_sync_logs), 동기화 RPC 접근용."""
+    return _create_client("iidx")

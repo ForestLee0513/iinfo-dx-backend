@@ -8,8 +8,8 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.openapi import setup_docs
 from app.db.redis import close_redis
-from app.services.admin import jobs as admin_jobs
-from app.services.difficulty_crawl import scheduler
+from app.services.iidx.admin import jobs as admin_jobs
+from app.services.iidx.difficulty_crawl import scheduler
 
 logging.basicConfig(level=logging.INFO)
 

@@ -18,8 +18,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.security import bearer_scheme, decode_token
-from app.crud import crud_bans, crud_profiles
-from app.schemas.user import AuthUser, UserRole
+from app.crud.account import bans as crud_bans, profiles as crud_profiles
+from app.schemas.account.user import AuthUser, UserRole
 
 
 async def get_current_user(

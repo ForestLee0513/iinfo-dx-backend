@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # (open redirect 방지). 지금은 로컬 FE만 허용 — 운영 도메인은 여기에 추가한다.
     OAUTH_ALLOWED_REDIRECT_URLS: list[str] = ["http://localhost:3000"]
 
-    # 어드민 전용 로그인(/admin/auth)의 OAuth 완료 후 허용 리다이렉트 URL 목록.
+    # 어드민 전용 로그인(/iidx/admin/auth)의 OAuth 완료 후 허용 리다이렉트 URL 목록.
     # 어드민 FE는 사용자 클라이언트와 별도 오리진이므로 위 목록과 분리한다
     # (.env에서 JSON 배열 한 줄). 지금은 로컬 어드민 FE만 허용 — 운영 도메인은 여기에 추가.
     ADMIN_ALLOWED_REDIRECT_URLS: list[str] = ["http://localhost:3001"]
@@ -46,7 +46,7 @@ class Settings(BaseSettings):
 
     # 크롤 대상(곡 마스터/난이도표)과 스케줄은 어드민 API로 관리하며 Supabase
     # (crawl_targets, crawl_schedules 테이블)에 저장된다.
-    # 대상 등록: POST /api/v1/crawl/targets. 스케줄 설정: PUT /api/v1/crawl/schedules/{target_key}.
+    # 대상 등록: POST /api/v1/iidx/crawl/targets. 스케줄 설정: PUT /api/v1/iidx/crawl/schedules/{target_key}.
     # 배포 직후에는 등록된 대상/스케줄이 하나도 없으므로 어드민이 등록하기 전까지
     # 아무 것도 자동 크롤되지 않는다.
 
