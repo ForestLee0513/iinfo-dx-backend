@@ -18,7 +18,7 @@ from typing import Any
 
 from postgrest.exceptions import APIError
 
-from app.db.session import get_supabase, get_supabase_svc
+from app.db.session import get_supabase, get_supabase_iidx
 from app.schemas.account.user import UserRole
 
 # public.profiles에서 프로필 표시에 필요한 컬럼
@@ -62,7 +62,7 @@ def _effective_role(platform_role: str | None, service_role: str | None) -> User
 def _fetch_svc(user_id: str) -> dict | None:
     """iidx.profiles 행 (온보딩 전이면 None)."""
     result = (
-        get_supabase_svc()
+        get_supabase_iidx()
         .table("profiles")
         .select(_SVC_COLUMNS)
         .eq("user_id", user_id)
@@ -204,6 +204,6 @@ def upsert_role(user_id: str, role: UserRole) -> None:
     갱신하면 된다. 행이 없으면 서비스 프로필을 생성(=온보딩 처리)한다.
     """
     service_role = UserRole.ADMIN.value if role == UserRole.ADMIN else UserRole.USER.value
-    get_supabase_svc().table("profiles").upsert(
+    get_supabase_iidx().table("profiles").upsert(
         {"user_id": user_id, "service_role": service_role}
     ).execute()

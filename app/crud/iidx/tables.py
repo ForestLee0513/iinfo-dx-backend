@@ -8,7 +8,7 @@ difficulty_tables / difficulty_entries는 public read(RLS) 대상이므로
 
 import logging
 
-from app.db.session import get_supabase_svc
+from app.db.session import get_supabase_iidx
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ _TABLE_META_COLUMNS = (
 def fetch_tables() -> list[dict]:
     """모든 난이도표 메타데이터 목록 (엔트리 제외)."""
     res = (
-        get_supabase_svc()
+        get_supabase_iidx()
         .table("difficulty_tables")
         .select(_TABLE_META_COLUMNS)
         .order("slug")
@@ -36,7 +36,7 @@ def fetch_table(slug: str) -> dict | None:
     difficulty_entries는 table_id FK로 임베드해 한 번에 가져온다.
     """
     res = (
-        get_supabase_svc()
+        get_supabase_iidx()
         .table("difficulty_tables")
         .select("*, difficulty_entries(*)")
         .eq("slug", slug)
