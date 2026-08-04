@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # Redis — 크롤 작업 실행 상태(재기동 시 이어하기)
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # 성적 CSV 저장용 Supabase Storage 버킷명.
+    # Supabase Storage는 S3-compatible API를 제공하므로 AWS S3 이관 시
+    # storage.py의 클라이언트만 boto3로 교체하면 된다(경로 구조 유지).
+    IIDX_SCORE_BUCKET: str = "iidx-score-csv"
+
     # 별도 FE(클라이언트/어드민) 오리진 CORS 허용 목록 (.env에서 JSON 배열 한 줄)
     CORS_ORIGINS: list[str] = []
 

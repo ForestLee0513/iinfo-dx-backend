@@ -73,6 +73,13 @@ class IidxProfileUpdateRequest(BaseModel):
     is_public: bool | None = None
 
 
+class IidxProfileSyncRequest(BaseModel):
+    """POST /profile/iidx/me/sync 요청 — 북마크릿이 수집한 IIDX 프로필 데이터."""
+
+    dj_name: str | None = None
+    dj_id: str | None = None
+
+
 class FollowUserSummary(BaseModel):
     """팔로워/팔로잉 목록의 사용자 1명 요약."""
 

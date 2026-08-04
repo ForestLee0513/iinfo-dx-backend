@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Annotated, Callable
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.security import bearer_scheme, decode_token
@@ -130,3 +130,54 @@ AdminUser = Annotated[AuthUser, Depends(get_admin_user)]
 # 슈퍼어드민 전용 — 역할 부여 등 최상위 권한 작업 (개발자 본인 1명)
 get_super_admin_user = require_role(UserRole.SUPER_ADMIN)
 SuperAdminUser = Annotated[AuthUser, Depends(get_super_admin_user)]
+
+
+async def get_upload_user(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(bearer_scheme)
+    ],
+    x_upload_token: Annotated[str | None, Header()] = None,
+) -> AuthUser:
+    """JWT(Authorization: Bearer) 또는 업로드 토큰(X-Upload-Token) 중 하나로 인증.
+
+    북마크릿 업로드 엔드포인트 전용. 일반 Bearer JWT가 있으면 그걸 우선 사용하고,
+    없으면 X-Upload-Token 헤더로 Redis에서 user_id를 조회한다.
+    """
+    if credentials is not None:
+        return await get_current_user(credentials)
+
+    if x_upload_token is not None:
+        from app.services.iidx.scores.upload_token import get_user_id
+
+        user_id = await get_user_id(x_upload_token)
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="만료되었거나 유효하지 않은 업로드 토큰입니다.",
+            )
+        active_ban, profile = await asyncio.gather(
+            asyncio.to_thread(crud_bans.get_active_ban, user_id),
+            asyncio.to_thread(crud_profiles.get_profile, user_id),
+        )
+        if active_ban:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="접근이 제한된 계정입니다.",
+            )
+        return AuthUser(
+            id=user_id,
+            email=None,
+            provider=None,
+            app_role=profile.role,
+            is_public=profile.is_public,
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+# 북마크릿 업로드 전용 — JWT 또는 X-Upload-Token 헤더 중 하나 필수
+UploadUser = Annotated[AuthUser, Depends(get_upload_user)]

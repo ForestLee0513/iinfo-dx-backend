@@ -225,6 +225,22 @@ def update_iidx_editable_fields(user_id: str, *, is_public: Any = _UNSET) -> dic
     return get_profile_row(user_id) or {}
 
 
+def sync_iidx_stats(user_id: str, *, dj_name: str | None, dj_id: str | None) -> None:
+    """북마크릿이 수집한 DJ NAME / IIDX ID를 iidx.profiles에 반영한다.
+
+    행이 없으면(미온보딩) 아무것도 하지 않는다 — 온보딩은 별도 흐름에서 처리.
+    """
+    if _fetch_svc(user_id) is None:
+        return
+    payload: dict = {}
+    if dj_name is not None:
+        payload["dj_name"] = dj_name
+    if dj_id is not None:
+        payload["dj_id"] = dj_id
+    if payload:
+        get_supabase_iidx().table("profiles").update(payload).eq("user_id", user_id).execute()
+
+
 def upsert_is_public(user_id: str, is_public: bool) -> None:
     """public.profiles의 is_public 값을 업서트."""
     get_supabase().table("profiles").upsert(
