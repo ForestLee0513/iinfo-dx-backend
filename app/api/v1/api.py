@@ -14,7 +14,7 @@ from fastapi import APIRouter
 from app.api.v1.routes import health
 from app.api.v1.routes.account import auth, profile
 from app.api.v1.routes.admin import auth as admin_auth, users as admin_users
-from app.api.v1.routes.iidx import admin_catalog, crawl, tables
+from app.api.v1.routes.iidx import admin_catalog, crawl, profile as iidx_profile, tables
 
 api_router = APIRouter()
 
@@ -23,6 +23,8 @@ api_router.include_router(health.router, prefix="/health", tags=["Health"])
 
 # ── 공용 계정 계층 (public 스키마) — 최종 사용자, 모든 서비스 공유 ──
 api_router.include_router(auth.router, prefix="/auth", tags=["Account Auth"])
+# 서비스별 프로필 라우터를 /profile/{identifier} 앞에 등록해야 경로 충돌을 피한다.
+api_router.include_router(iidx_profile.router, prefix="/profile/iidx", tags=["IIDX Profile"])
 api_router.include_router(profile.router, prefix="/profile", tags=["Account Profile"])
 
 # ── 플랫폼 어드민 콘솔 (전체 서비스 관할) — /admin ──

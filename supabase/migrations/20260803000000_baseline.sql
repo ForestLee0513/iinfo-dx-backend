@@ -160,6 +160,7 @@ create table iidx.profiles (
   dj_id        text check (dj_id   is null or dj_id   ~ '^[0-9]{4}-[0-9]{4}$'),
   service_role text not null default 'USER'
                  check (service_role = any (array['USER', 'ADMIN'])),
+  is_public    boolean not null default true,
   joined_at    timestamptz not null default now()
 );
 

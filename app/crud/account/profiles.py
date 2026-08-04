@@ -26,7 +26,7 @@ _PUBLIC_COLUMNS = (
     "id, handle, social_links, profile_image_url, is_public, platform_role, updated_at"
 )
 # iidx.profiles에서 서비스 전용 필드
-_SVC_COLUMNS = "dj_name, dj_id, service_role"
+_SVC_COLUMNS = "dj_name, dj_id, service_role, is_public"
 
 # update_editable_fields에서 '전달 안 함'과 'null로 명시적으로 지움'을 구분하기
 # 위한 내부 전용 sentinel — 호출자는 이 값을 알 필요 없이 키워드를 생략하면 된다.
@@ -37,6 +37,14 @@ _UNSET = object()
 class UserProfile:
     is_public: bool
     role: UserRole
+
+
+class NotMemberError(Exception):
+    """iidx.profiles 행이 없어 서비스에 온보딩되지 않은 경우."""
+
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        super().__init__(f"IIDX 서비스에 가입하지 않은 사용자입니다: {user_id}")
 
 
 class HandleTakenError(Exception):
@@ -79,6 +87,7 @@ def _merge_row(pub: dict) -> dict:
     return {
         "user_id": pub["id"],
         "is_public": bool(pub["is_public"]),
+        "iidx_is_public": bool((svc or {}).get("is_public", True)),
         "role": role.value,
         "updated_at": pub.get("updated_at"),
         "handle": pub.get("handle"),
@@ -164,10 +173,11 @@ def update_editable_fields(
     *,
     handle: Any = _UNSET,
     social_links: Any = _UNSET,
+    is_public: Any = _UNSET,
 ) -> dict:
-    """본인이 API로 바꿀 수 있는 필드(handle, social_links)만 부분 업데이트한다.
+    """본인이 API로 바꿀 수 있는 필드(handle, social_links, is_public)만 부분 업데이트한다.
 
-    두 필드 모두 public.profiles에 있다. 키워드를 아예 생략하면 해당 필드는
+    세 필드 모두 public.profiles에 있다. 키워드를 아예 생략하면 해당 필드는
     변경하지 않는다. handle=None으로 명시하면 핸들을 해제(release)한다. 프로필
     행은 가입 트리거로 이미 존재하지만, 안전하게 upsert(PK=id)로 처리한다.
     handle 중복(DB unique 제약 위반, code 23505)은 HandleTakenError로 변환한다.
@@ -177,6 +187,8 @@ def update_editable_fields(
         payload["handle"] = handle
     if social_links is not _UNSET:
         payload["social_links"] = social_links if social_links is not None else []
+    if is_public is not _UNSET:
+        payload["is_public"] = is_public
 
     if len(payload) > 1:
         try:
@@ -186,6 +198,27 @@ def update_editable_fields(
                 raise HandleTakenError(handle if handle is not _UNSET else None) from e
             raise
 
+    return get_profile_row(user_id) or {}
+
+
+def is_iidx_member(user_id: str) -> bool:
+    """iidx.profiles 행이 존재하면(=온보딩 완료) True."""
+    return _fetch_svc(user_id) is not None
+
+
+def update_iidx_editable_fields(user_id: str, *, is_public: Any = _UNSET) -> dict:
+    """IIDX 서비스 프로필에서 본인이 API로 바꿀 수 있는 필드를 부분 업데이트한다.
+
+    iidx.profiles 행이 없으면(미온보딩) NotMemberError를 발생시킨다.
+    키워드를 생략하면 해당 필드는 변경하지 않는다.
+    """
+    if _fetch_svc(user_id) is None:
+        raise NotMemberError(user_id)
+    payload: dict = {}
+    if is_public is not _UNSET:
+        payload["is_public"] = is_public
+    if payload:
+        get_supabase_iidx().table("profiles").update(payload).eq("user_id", user_id).execute()
     return get_profile_row(user_id) or {}
 
 

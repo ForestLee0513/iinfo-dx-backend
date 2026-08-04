@@ -1,10 +1,8 @@
 """사용자 프로필 조회/수정(웹 클라이언트) API 모델.
 
-프로필은 public.profiles(handle/social_links/is_public/profile_image_url)와
-iidx.profiles(dj_name/dj_id)에 걸쳐 있으나, 응답은 단일 프로필로 합쳐 내려준다
-(crud_profiles가 합성). dj_name/dj_id/profile_image_url은 요청 모델에 없다 —
-사용자가 API로 직접 수정하지 않는 필드다(DB 직접 등록, 추후 북마크릿 데이터 갱신
-파이프라인이 채운다).
+ProfileResponse는 플랫폼 수준 공통 프로필(public.profiles)만 담는다.
+서비스 전용 필드(dj_name/dj_id 등)는 IidxProfileResponse처럼 서비스별 응답에만 포함된다.
+요청 모델에 dj_name/dj_id/profile_image_url은 없다 — API로 직접 수정하지 않는 필드다.
 """
 
 import re
@@ -33,10 +31,11 @@ class SocialLink(BaseModel):
 
 
 class ProfileResponse(BaseModel):
-    """GET /profile/{identifier} 응답.
+    """GET /profile/{identifier} 응답 — 플랫폼 수준 공통 프로필.
 
-    email/provider는 본인 조회(is_mine=True)일 때만 채워진다 — 요청자의 인증
-    토큰 클레임에서 가져오며, 타인의 이메일은 노출하지 않는다.
+    서비스 전용 필드(dj_name/dj_id 등)는 포함하지 않는다. 서비스 프로필이
+    필요하면 /profile/{service}/{identifier} 엔드포인트를 사용할 것.
+    email/provider는 본인 조회(is_mine=True)일 때만 채워진다.
     """
 
     id: str
@@ -44,8 +43,6 @@ class ProfileResponse(BaseModel):
     role: UserRole = UserRole.USER
     is_public: bool = True
     social_links: list[SocialLink] = Field(default_factory=list)
-    dj_name: str | None = None
-    dj_id: str | None = None
     profile_image_url: str | None = None
     updated_at: datetime | None = None
     is_mine: bool = False
@@ -55,6 +52,24 @@ class ProfileResponse(BaseModel):
     following_count: int = 0
     # 익명 요청이거나 본인 프로필을 볼 때는 의미가 없으므로 None
     is_following: bool | None = None
+
+
+class IidxProfileResponse(ProfileResponse):
+    """GET /profile/iidx/{identifier} 응답 — 플랫폼 프로필 + IIDX 서비스 전용 필드.
+
+    is_public은 플랫폼 수준, iidx_is_public은 IIDX 서비스 수준 공개 여부다.
+    가시성 게이트는 iidx_is_public 기준.
+    """
+
+    iidx_is_public: bool = True
+    dj_name: str | None = None
+    dj_id: str | None = None
+
+
+class IidxProfileUpdateRequest(BaseModel):
+    """PATCH /profile/iidx/me 요청 — 명시적으로 보낸 필드만 갱신한다(부분 업데이트)."""
+
+    is_public: bool | None = None
 
 
 class FollowUserSummary(BaseModel):
@@ -78,11 +93,13 @@ class ProfileUpdateRequest(BaseModel):
     """PATCH /profile/me 요청 — 명시적으로 보낸 필드만 갱신한다(부분 업데이트).
 
     handle을 null로 보내면 핸들을 해제(release)한다. social_links는 보낸 목록
-    전체로 치환된다(부분 추가/삭제가 아니라 통째로 교체).
+    전체로 치환된다(부분 추가/삭제가 아니라 통째로 교체). is_public은 프로필
+    공개 여부를 전환한다.
     """
 
     handle: str | None = None
     social_links: list[SocialLink] | None = None
+    is_public: bool | None = None
 
     @field_validator("handle")
     @classmethod

@@ -75,8 +75,6 @@ def _to_response(
         role=UserRole(row.get("role", "USER")),
         is_public=bool(row["is_public"]),
         social_links=row.get("social_links") or [],
-        dj_name=row.get("dj_name"),
-        dj_id=row.get("dj_id"),
         profile_image_url=row.get("profile_image_url"),
         updated_at=row.get("updated_at"),
         is_mine=is_mine,
@@ -126,12 +124,12 @@ def get_profile(identifier: str, identity: OptionalIdentity):
 
 @router.patch(
     "/me",
-    summary="내 프로필 수정 (handle/social_links)",
+    summary="내 프로필 수정 (handle/social_links/is_public)",
     response_model=ProfileResponse,
     openapi_extra=PUBLIC,
 )
 def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
-    """본인 프로필 중 handle/social_links만 수정한다(둘 다 부분 업데이트).
+    """본인 프로필 중 handle/social_links/is_public을 수정한다(부분 업데이트).
 
     요청 본문에 없는 필드는 그대로 유지된다. handle을 null로 보내면 핸들을
     해제하고, 이미 다른 사용자가 쓰는 handle이면 409를 반환한다.
@@ -146,6 +144,8 @@ def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
             if body.social_links is not None
             else []
         )
+    if "is_public" in fields:
+        kwargs["is_public"] = body.is_public
 
     if kwargs:
         try:
