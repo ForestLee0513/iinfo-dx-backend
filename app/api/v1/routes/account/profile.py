@@ -83,6 +83,7 @@ def _to_response(
         followers_count=followers_count,
         following_count=following_count,
         is_following=is_following,
+        joined_services=row.get("joined_services") or [],
     )
 
 
