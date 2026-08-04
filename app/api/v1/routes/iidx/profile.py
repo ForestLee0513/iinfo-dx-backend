@@ -13,13 +13,16 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import CurrentUser, OptionalIdentity
+import asyncio
+
+from app.api.deps import CurrentUser, OptionalIdentity, UploadUser
 from app.core.openapi import PUBLIC
 from app.crud.account import follows as crud_follows, profiles as crud_profiles
 from app.crud.account.profiles import NotMemberError
 from app.schemas.account.profile import (
     HANDLE_PATTERN,
     IidxProfileResponse,
+    IidxProfileSyncRequest,
     IidxProfileUpdateRequest,
 )
 from app.schemas.account.user import UserRole
@@ -141,4 +144,24 @@ def update_iidx_profile(body: IidxProfileUpdateRequest, user: CurrentUser):
         followers_count=crud_follows.followers_count(user.id),
         following_count=crud_follows.following_count(user.id),
         is_following=None,
+    )
+
+
+@router.post(
+    "/me/sync",
+    summary="북마크릿 IIDX 프로필 동기화",
+    status_code=204,
+    openapi_extra=PUBLIC,
+)
+async def sync_iidx_profile(body: IidxProfileSyncRequest, user: UploadUser):
+    """북마크릿이 수집한 DJ NAME / IIDX ID를 iidx.profiles에 반영한다.
+
+    JWT(Authorization: Bearer) 또는 업로드 토큰(X-Upload-Token) 중 하나로 인증한다.
+    iidx.profiles 행이 없으면(미온보딩) 아무것도 하지 않고 성공을 반환한다.
+    """
+    await asyncio.to_thread(
+        crud_profiles.sync_iidx_stats,
+        user.id,
+        dj_name=body.dj_name,
+        dj_id=body.dj_id,
     )

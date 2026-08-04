@@ -14,7 +14,7 @@ from fastapi import APIRouter
 from app.api.v1.routes import health
 from app.api.v1.routes.account import auth, profile
 from app.api.v1.routes.admin import auth as admin_auth, users as admin_users
-from app.api.v1.routes.iidx import admin_catalog, crawl, profile as iidx_profile, tables
+from app.api.v1.routes.iidx import admin_catalog, crawl, profile as iidx_profile, scores as iidx_scores, tables
 
 api_router = APIRouter()
 
@@ -40,6 +40,7 @@ api_router.include_router(admin_router)
 iidx_router = APIRouter(prefix="/iidx")
 iidx_router.include_router(tables.router, prefix="/tables", tags=["IIDX"])
 iidx_router.include_router(crawl.router, prefix="/crawl", tags=["IIDX Crawl"])
+iidx_router.include_router(iidx_scores.router, prefix="/scores", tags=["IIDX Scores"])
 # 등록된 곡/난이도표 조회(ADMIN) — IIDX 서비스 데이터라 /iidx 아래에 둔다
 iidx_router.include_router(admin_catalog.router, prefix="/admin", tags=["IIDX Admin Catalog"])
 api_router.include_router(iidx_router)

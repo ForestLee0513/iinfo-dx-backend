@@ -225,3 +225,7 @@ __marimo__/
 #   개인 로컬 설정(권한 허용 목록 등)만 제외한다.
 .claude/settings.local.json
 .claude/*.local.json
+
+
+# 예제 파일
+example/
