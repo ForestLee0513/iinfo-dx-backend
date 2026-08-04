@@ -52,6 +52,7 @@ class ProfileResponse(BaseModel):
     following_count: int = 0
     # 익명 요청이거나 본인 프로필을 볼 때는 의미가 없으므로 None
     is_following: bool | None = None
+    joined_services: list[str] = Field(default_factory=list)
 
 
 class IidxProfileResponse(ProfileResponse):
