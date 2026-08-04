@@ -7,14 +7,14 @@ Supabase 파이썬 클라이언트는 동기식이므로 async 경로에서는
 asyncio.to_thread로 감싸서 호출한다 (pipeline.py / admin_catalog.py 참고).
 스키마/RPC 정의: supabase/migrations/20260803000000_baseline.sql
 (versions/songs/charts + sync_song_master + 크롤 로그(crawl_sync_logs) 모두 iidx
-스키마). 읽기·쓰기·로그 전부 iidx 클라이언트(get_supabase_svc)를 쓴다.
+스키마). 읽기·쓰기·로그 전부 iidx 클라이언트(get_supabase_iidx)를 쓴다.
 """
 
 from __future__ import annotations
 
 import logging
 
-from app.db.session import get_supabase_svc
+from app.db.session import get_supabase_iidx
 from app.services.iidx.songs_crawl.crawlers.base import SongMasterResult
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ _LOG_KEY_PREFIX = "song-master:"
 def _log(source: str, count: int | None, status: str, error: str | None) -> None:
     """iidx.crawl_sync_logs에 실행 기록. 로그 실패가 동기화를 막지 않게 한다."""
     try:
-        get_supabase_svc().table("crawl_sync_logs").insert({
+        get_supabase_iidx().table("crawl_sync_logs").insert({
             "target_key": f"{_LOG_KEY_PREFIX}{source}",
             "crawler": source,
             "triggered_by": "schedule",
@@ -45,7 +45,7 @@ def sync_song_master(result: SongMasterResult) -> dict:
     이번 크롤에 없는 곡/채보는 in_ac=false 처리 (삭제하지 않음).
     """
     try:
-        res = get_supabase_svc().rpc("sync_song_master", {
+        res = get_supabase_iidx().rpc("sync_song_master", {
             "p_payload": {"versions": result.versions, "songs": result.songs},
         }).execute()
         counts = res.data if isinstance(res.data, dict) else {}
@@ -94,7 +94,7 @@ def list_songs(
     반환: {"songs": [...], "total": n} — total은 필터 적용 후 전체 개수.
     """
     q = (
-        get_supabase_svc()
+        get_supabase_iidx()
         .table("songs")
         .select(f"{_SONG_LIST_COLUMNS}, versions(name)", count="exact")
     )
@@ -121,7 +121,7 @@ def get_song(song_id: str) -> dict | None:
     charts는 song_id FK로 임베드해 한 번에 가져온다.
     """
     res = (
-        get_supabase_svc()
+        get_supabase_iidx()
         .table("songs")
         .select("*, versions(name), charts(*)")
         .eq("id", song_id)
@@ -135,7 +135,7 @@ def get_song(song_id: str) -> dict | None:
 def list_versions() -> list[dict]:
     """버전 목록 (곡 필터 드롭다운용), id 오름차순."""
     res = (
-        get_supabase_svc()
+        get_supabase_iidx()
         .table("versions")
         .select("id, name, abbrev")
         .order("id")

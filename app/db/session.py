@@ -7,7 +7,7 @@ web(읽기) · crawl(쓰기) 서비스가 공통으로 사용한다.
 스키마가 둘로 나뉘어 있어(공통 계정 = public, IIDX 서비스 = iidx) 스키마별 전용
 클라이언트를 둔다:
   - get_supabase()      : public (auth 계정 계층 — profiles/user_bans/user_follows, RPC admin_list_users)
-  - get_supabase_svc()  : iidx   (곡/채보/버전/난이도표 + 서비스 프로필 + 크롤 운영
+  - get_supabase_iidx() : iidx   (곡/채보/버전/난이도표 + 서비스 프로필 + 크롤 운영
                                    테이블(crawl_*) + 동기화 RPC)
 
 각 클라이언트는 생성 시점에 기본 스키마를 고정한다(ClientOptions.schema). 이렇게
@@ -81,7 +81,7 @@ def get_supabase() -> Client:
 
 
 @lru_cache
-def get_supabase_svc() -> Client:
+def get_supabase_iidx() -> Client:
     """iidx 스키마 클라이언트 — 곡/채보/버전/난이도표/서비스 프로필, 크롤 운영
     테이블(crawl_targets/crawl_schedules/crawl_sync_logs), 동기화 RPC 접근용."""
     return _create_client("iidx")
