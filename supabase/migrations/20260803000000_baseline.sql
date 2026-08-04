@@ -53,11 +53,13 @@ create schema iidx;
 create or replace function public.current_user_id()
 returns uuid
 language sql stable
+set search_path = ''
 as $$ select nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid $$;
 
 create or replace function public.touch_updated_at()
 returns trigger
 language plpgsql
+set search_path = ''
 as $$
 begin
   new.updated_at = now();
@@ -125,7 +127,7 @@ create index user_bans_active_idx
 
 create or replace function public.is_banned(p_service text default null)
 returns boolean
-language sql stable security definer set search_path = ''
+language sql stable security invoker set search_path = ''
 as $$
   select exists (
     select 1 from public.user_bans b
@@ -167,7 +169,7 @@ create table iidx.profiles (
 -- 이 행의 존재 여부가 곧 "이 서비스에 온보딩했는가"의 답이다.
 create or replace function iidx.is_member()
 returns boolean
-language sql stable security definer set search_path = ''
+language sql stable security invoker set search_path = ''
 as $$
   select exists (
     select 1 from iidx.profiles
@@ -177,7 +179,7 @@ $$;
 
 create or replace function iidx.is_admin()
 returns boolean
-language sql stable security definer set search_path = ''
+language sql stable security invoker set search_path = ''
 as $$
   select exists (
     select 1 from iidx.profiles p
@@ -399,6 +401,11 @@ alter default privileges in schema iidx
 -- (RLS 정책이 없어 행은 이미 안 보이지만, grant까지 없애 defense-in-depth).
 revoke select on iidx.crawl_targets, iidx.crawl_schedules, iidx.crawl_sync_logs
   from anon, authenticated;
+
+-- 트리거 전용 함수: REST API(/rpc/...)를 통한 직접 호출 차단.
+-- 트리거는 role 권한이 아닌 트리거 오너 권한으로 실행되므로 동작에 영향 없음.
+revoke execute on function public.handle_new_user() from public;
+revoke execute on function public.touch_updated_at() from public;
 
 -- 백엔드 전용: service_role은 iidx 스키마 전체에 접근한다. Supabase는 public
 -- 스키마에 대해서만 service_role 기본 권한을 세팅해 두므로, 커스텀 스키마(iidx)에는
@@ -658,6 +665,102 @@ grant execute on function iidx.sync_song_master(jsonb)             to service_ro
 grant execute on function iidx.sync_table_result(jsonb, jsonb, text) to service_role;
 grant execute on function public.admin_list_users(text, text, boolean, text, int, int)
   to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 사용자 성적 CSV 업로드 · 스냅샷 · 파싱 데이터
+--
+-- baseline(20260803000000_baseline.sql)이 이미 적용된 환경에 대한 증분 마이그레이션.
+-- 새 환경이라면 baseline에 이 내용을 합쳐 적용해도 된다.
+--
+-- 테이블 구조:
+--   score_uploads      : CSV 업로드 이력 (Storage 경로 + 메타, 스냅샷 단위)
+--   score_current      : 사용자 × 스타일별 현재 활성 스냅샷 포인터
+--   user_chart_scores  : 파싱된 성적 데이터 (upload_id 단위 보관)
+--
+-- 스냅샷 복구는 score_current.upload_id 를 바꾸는 것으로 충분하다.
+-- 원본 CSV 는 Supabase Storage(iidx-score-csv 버킷)에 보관된다.
+-- ---------------------------------------------------------------------------
+
+create table iidx.score_uploads (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references public.profiles(id) on delete cascade,
+  play_style    text not null check (play_style = any(array['SP', 'DP'])),
+  -- official: eagate score_download 원본 / crawled: 북마크릿 재조합 CSV
+  source        text not null check (source = any(array['official', 'crawled'])),
+  content_hash  text not null,   -- SHA-256 hex (동일 내용 재업로드 감지)
+  storage_path  text not null,   -- Supabase Storage 버킷 내 상대 경로
+  song_count    integer not null default 0,
+  uploaded_at   timestamptz not null default now(),
+  -- 동일 사용자·스타일·내용 중복 업로드 방지 (→ 스냅샷 미생성)
+  unique (user_id, play_style, content_hash)
+);
+
+create table iidx.score_current (
+  user_id    uuid not null references public.profiles(id) on delete cascade,
+  play_style text not null check (play_style = any(array['SP', 'DP'])),
+  upload_id  uuid not null references iidx.score_uploads(id),
+  applied_at timestamptz not null default now(),
+  primary key (user_id, play_style)
+);
+
+create table iidx.user_chart_scores (
+  upload_id      uuid not null references iidx.score_uploads(id) on delete cascade,
+  user_id        uuid not null references public.profiles(id) on delete cascade,
+  play_style     text not null check (play_style = any(array['SP', 'DP'])),
+  title          text not null,
+  difficulty     text not null
+                 check (difficulty = any(array['BEGINNER','NORMAL','HYPER','ANOTHER','LEGGENDARIA'])),
+  -- 공식 CSV 전용 필드 — 크롤 방식이면 null
+  version        text,
+  genre          text,
+  artist         text,
+  play_count     integer,
+  last_played_at timestamptz,
+  miss_count     integer,
+  -- 공통 성적
+  level          smallint not null,
+  ex_score       integer not null default 0,
+  pgreat         integer not null default 0,
+  great          integer not null default 0,
+  clear_type     text,
+  dj_level       text,
+  -- 곡 마스터 매칭 성공 시 채워짐 (타이틀 불일치 등으로 null 가능)
+  song_id        uuid references iidx.songs(id),
+  primary key (upload_id, title, difficulty)
+);
+
+-- RLS (service_role은 RLS 우회 — 백엔드는 service_role 키만 사용)
+alter table iidx.score_uploads        enable row level security;
+alter table iidx.score_current        enable row level security;
+alter table iidx.user_chart_scores    enable row level security;
+
+-- authenticated 사용자는 본인 데이터만 읽기/쓰기
+create policy score_uploads_self on iidx.score_uploads
+  for all using (user_id = public.current_user_id())
+  with check (user_id = public.current_user_id());
+
+create policy score_current_self on iidx.score_current
+  for all using (user_id = public.current_user_id())
+  with check (user_id = public.current_user_id());
+
+create policy user_chart_scores_self on iidx.user_chart_scores
+  for all using (user_id = public.current_user_id())
+  with check (user_id = public.current_user_id());
+
+-- score 테이블은 "grant all on all tables in schema iidx"(line 앞쪽) 이후에 생성되므로
+-- blanket grant 적용 범위에 들지 않는다. 명시적으로 재부여.
+grant all privileges on iidx.score_uploads     to service_role;
+grant all privileges on iidx.score_current     to service_role;
+grant all privileges on iidx.user_chart_scores to service_role;
+
+-- authenticated: 읽기(select)는 blanket grant가 이미 앞에 있으나 같은 이유로 미적용.
+-- 쓰기는 별도 명시(insert/update/delete).
+grant select, insert, update, delete on iidx.score_uploads     to authenticated;
+grant select, insert, update, delete on iidx.score_current     to authenticated;
+grant select, insert, update, delete on iidx.user_chart_scores to authenticated;
+
+-- 성적 데이터는 비공개 — anon에겐 select 차단 (defense-in-depth, crawl 테이블과 동일 패턴)
+revoke select on iidx.score_uploads, iidx.score_current, iidx.user_chart_scores from anon;
 
 commit;
 
