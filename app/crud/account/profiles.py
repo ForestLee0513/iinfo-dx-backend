@@ -81,9 +81,11 @@ def _fetch_svc(user_id: str) -> dict | None:
 
 
 def _merge_row(pub: dict) -> dict:
-    """public.profiles 행 + iidx.profiles 행을 예전 평탄한 프로필 dict로 합친다."""
+    """public.profiles 행 + iidx.profiles 행을 평탄한 프로필 dict로 합친다."""
     svc = _fetch_svc(pub["id"])
     role = _effective_role(pub.get("platform_role"), (svc or {}).get("service_role"))
+    # 서비스 추가 시 온보딩 여부를 여기서 함께 확인한다(_fetch_svc 재호출 없이).
+    joined_services: list[str] = ["iidx"] if svc is not None else []
     return {
         "user_id": pub["id"],
         "is_public": bool(pub["is_public"]),
@@ -95,6 +97,7 @@ def _merge_row(pub: dict) -> dict:
         "dj_name": (svc or {}).get("dj_name"),
         "dj_id": (svc or {}).get("dj_id"),
         "profile_image_url": pub.get("profile_image_url"),
+        "joined_services": joined_services,
     }
 
 
