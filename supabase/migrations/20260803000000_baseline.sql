@@ -209,6 +209,9 @@ create table iidx.versions (
 create table iidx.songs (
   id          uuid primary key default gen_random_uuid(),
   title       text not null,
+  -- 성적 CSV(eagate) 타이틀이 마스터(textage) 표기와 달라 매칭 실패할 때 쓰는
+  -- 수동 별칭 목록. 매처가 title 매칭 실패 시 aliases 로 폴백 조회한다.
+  aliases     text[] not null default '{}',
   series      text unique,
   textage_tag text unique,
   genre       text,
@@ -223,6 +226,9 @@ create table iidx.songs (
 create trigger songs_touch
   before update on iidx.songs
   for each row execute function public.touch_updated_at();
+
+-- 별칭 조회용(관리자 검색 등). 매처는 전량 메모리 로드라 필수는 아니다.
+create index songs_aliases_idx on iidx.songs using gin (aliases);
 
 create table iidx.charts (
   id         uuid primary key default gen_random_uuid(),
@@ -454,6 +460,11 @@ begin
 
   -- 2) 곡 upsert (textage_tag 기준). in_ac은 크롤러가 판별한 값을 사용
   --    (actbl 상태플래그 bit0 — textage에서 tt2/firebrick로 표시되는 AC 삭제곡).
+  --
+  --    ⚠ aliases 컬럼은 do update set 에 절대 포함하지 말 것.
+  --    aliases 는 성적 매칭용으로 사람이 수동 등록하는 값이라, 크롤 payload 에
+  --    없으며 여기서 갱신하면 매 크롤마다 날아간다. update 대상에서 의도적으로
+  --    제외해 기존 값을 보존한다(신규 곡은 컬럼 기본값 '{}' 로 삽입됨).
   insert into songs (textage_tag, title, genre, artist, version, in_ac)
   select s->>'tag', s->>'title', s->>'genre', s->>'artist', (s->>'version')::smallint,
          coalesce((s->>'in_ac')::boolean, true)
@@ -465,6 +476,7 @@ begin
     version    = excluded.version,
     in_ac      = excluded.in_ac,
     updated_at = now();
+    -- (aliases 는 여기서 갱신하지 않음 — 위 주석 참고)
 
   -- 3) 채보 upsert
   insert into charts (song_id, play_style, difficulty, level, in_ac)
