@@ -10,16 +10,19 @@
 
 import asyncio
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CurrentUser, UploadUser
 from app.core.openapi import PUBLIC
+from app.crud.account import profiles as crud_profiles
 from app.crud.iidx import scores as crud_scores
 from app.schemas.iidx.scores import (
     ChartScoreItem,
     DownloadUrlResponse,
+    MultiUploadResponse,
     RestoreResponse,
     ScoreListResponse,
+    ScoreUploadRequest,
     SnapshotListResponse,
     SnapshotSummary,
     UploadResponse,
@@ -40,13 +43,14 @@ _ALLOWED_STYLES = {"SP", "DP"}
     openapi_extra=PUBLIC,
 )
 async def create_upload_token(user: CurrentUser):
-    """북마크릿에서 사용할 단기 업로드 토큰을 발급한다 (1시간 유효).
+    """북마크릿에서 사용할 단기 업로드 토큰을 발급한다 (10분 유효).
 
     웹 FE에서 로그인 후 이 API로 토큰을 발급받아 북마크릿 UI에 붙여넣으면
     크롤 완료 후 성적 CSV와 프로필이 자동으로 서버에 업로드된다.
+    아직 만료되지 않은 토큰이 있으면 새로 발급하지 않고 기존 토큰을 반환한다.
     """
-    token = await _upload_token.create_token(user.id)
-    return UploadTokenResponse(token=token, expires_in=_upload_token.TTL)
+    token, expires_in = await _upload_token.create_token(user.id)
+    return UploadTokenResponse(token=token, expires_in=expires_in)
 _MAX_CSV_BYTES = 10 * 1024 * 1024  # 10 MB 상한
 
 
@@ -57,43 +61,74 @@ def _check_style(style: str) -> None:
 
 @router.post(
     "/upload",
-    summary="성적 CSV 업로드",
-    response_model=UploadResponse,
+    summary="성적 업로드 (SP/DP 한 번에)",
+    response_model=MultiUploadResponse,
     openapi_extra=PUBLIC,
 )
-async def upload_scores(
-    user: UploadUser,
-    style: str = Query(..., description="SP 또는 DP"),
-    file: UploadFile = File(..., description="eagate 성적 CSV (공식 또는 북마크릿 크롤)"),
-):
-    """eagate 성적 CSV를 업로드해 성적을 갱신하고 스냅샷을 생성한다.
+async def upload_scores(user: UploadUser, body: ScoreUploadRequest):
+    """eagate 성적을 SP/DP 한 번의 JSON 요청으로 업로드해 성적·프로필을 갱신한다.
 
+    - `csv.SP` / `csv.DP` 중 있는 스타일만 각각 처리한다(최소 하나 필수). 스타일을
+      쿼리 파라미터로 나눠 두 번 호출하지 않으므로, 첫 호출에서 토큰이 만료돼
+      두 번째가 실패하던 문제가 없다.
     - 공식 CSV(score_download.html)와 북마크릿 크롤 CSV를 자동 판별한다.
       공식: バージョン/ジャンル/アーティスト/プレー回数/ミスカウント/最終プレー日시 모두 채워짐.
       크롤: 위 필드가 모두 null로 저장됨.
     - 이전 업로드와 내용이 완전히 동일하면 스냅샷을 생성하지 않고 changed=false를 반환한다.
+    - `profile`(크롤러 Profile)을 함께 보내면 IIDX 프로필도 같은 요청에서 동기화한다
+      (미온보딩이면 무시).
+    - 업로드 토큰(X-Upload-Token)으로 인증했다면 모든 성적 처리 성공 후 그 토큰을
+      즉시 만료시킨다.
     """
-    _check_style(style)
+    items = [(s, c) for s, c in (("SP", body.csv.SP), ("DP", body.csv.DP)) if c is not None]
+    if not items:
+        raise HTTPException(
+            status_code=400, detail="csv.SP 또는 csv.DP 중 최소 하나가 필요합니다."
+        )
 
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="빈 파일입니다.")
-    if len(content) > _MAX_CSV_BYTES:
-        raise HTTPException(status_code=413, detail="파일이 너무 큽니다 (최대 10 MB).")
+    results: list[UploadResponse] = []
+    for style, text in items:
+        content = text.encode("utf-8")
+        if not content:
+            raise HTTPException(status_code=400, detail=f"{style} CSV가 비어 있습니다.")
+        if len(content) > _MAX_CSV_BYTES:
+            raise HTTPException(
+                status_code=413, detail=f"{style} 파일이 너무 큽니다 (최대 10 MB)."
+            )
+        try:
+            result = await upload_score_csv(user.id, style, content)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=f"{style}: {e}")
+        results.append(
+            UploadResponse(
+                upload_id=result.upload_id,
+                play_style=style,
+                source=result.source,
+                song_count=result.song_count,
+                uploaded_at=result.uploaded_at,
+                changed=result.changed,
+            )
+        )
 
-    try:
-        result = await upload_score_csv(user.id, style, content)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    # 모든 스타일 업로드가 성공한 뒤에만 프로필 동기화 + 토큰 소모를 수행한다.
+    if body.profile is not None:
+        p = body.profile
+        await asyncio.to_thread(
+            crud_profiles.sync_iidx_stats,
+            user.id,
+            dj_name=p.djName,
+            dj_id=p.iidxId,
+            community_nickname=p.communityNickname,
+            play_count=p.playCount,
+            notes_radar=p.notesRadar.model_dump() if p.notesRadar is not None else None,
+            dan=p.dan.model_dump() if p.dan is not None else None,
+            arena_class=p.arenaClass.model_dump() if p.arenaClass is not None else None,
+        )
 
-    return UploadResponse(
-        upload_id=result.upload_id,
-        play_style=style,
-        source=result.source,
-        song_count=result.song_count,
-        uploaded_at=result.uploaded_at,
-        changed=result.changed,
-    )
+    if user.upload_token is not None:
+        await _upload_token.revoke_token(user.upload_token)
+
+    return MultiUploadResponse(results=results)
 
 
 @router.get(

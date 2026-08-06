@@ -170,6 +170,7 @@ async def get_upload_user(
             provider=None,
             app_role=profile.role,
             is_public=profile.is_public,
+            upload_token=x_upload_token,
         )
 
     raise HTTPException(
