@@ -65,19 +65,18 @@ class IidxProfileResponse(ProfileResponse):
     iidx_is_public: bool = True
     dj_name: str | None = None
     dj_id: str | None = None
+    # 북마크릿 프로필 크롤 필드 (미크롤 시 null). 상세 구조는 크롤러 Profile 타입 참고.
+    community_nickname: str | None = None
+    play_count: int | None = None
+    notes_radar: dict | None = None   # {SP:{...}, DP:{...}}
+    dan: dict | None = None           # {SP:"10TH_DAN"|null, DP:...}
+    arena_class: dict | None = None   # {SP:"B4", DP:"---"}
 
 
 class IidxProfileUpdateRequest(BaseModel):
     """PATCH /profile/iidx/me 요청 — 명시적으로 보낸 필드만 갱신한다(부분 업데이트)."""
 
     is_public: bool | None = None
-
-
-class IidxProfileSyncRequest(BaseModel):
-    """POST /profile/iidx/me/sync 요청 — 북마크릿이 수집한 IIDX 프로필 데이터."""
-
-    dj_name: str | None = None
-    dj_id: str | None = None
 
 
 class FollowUserSummary(BaseModel):

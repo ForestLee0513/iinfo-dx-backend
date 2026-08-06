@@ -26,7 +26,10 @@ _PUBLIC_COLUMNS = (
     "id, handle, social_links, profile_image_url, is_public, platform_role, updated_at"
 )
 # iidx.profiles에서 서비스 전용 필드
-_SVC_COLUMNS = "dj_name, dj_id, service_role, is_public"
+_SVC_COLUMNS = (
+    "dj_name, dj_id, community_nickname, play_count, notes_radar, dan, arena_class, "
+    "service_role, is_public"
+)
 
 # update_editable_fields에서 '전달 안 함'과 'null로 명시적으로 지움'을 구분하기
 # 위한 내부 전용 sentinel — 호출자는 이 값을 알 필요 없이 키워드를 생략하면 된다.
@@ -96,6 +99,11 @@ def _merge_row(pub: dict) -> dict:
         "social_links": pub.get("social_links") or [],
         "dj_name": (svc or {}).get("dj_name"),
         "dj_id": (svc or {}).get("dj_id"),
+        "community_nickname": (svc or {}).get("community_nickname"),
+        "play_count": (svc or {}).get("play_count"),
+        "notes_radar": (svc or {}).get("notes_radar"),
+        "dan": (svc or {}).get("dan"),
+        "arena_class": (svc or {}).get("arena_class"),
         "profile_image_url": pub.get("profile_image_url"),
         "joined_services": joined_services,
     }
@@ -225,20 +233,42 @@ def update_iidx_editable_fields(user_id: str, *, is_public: Any = _UNSET) -> dic
     return get_profile_row(user_id) or {}
 
 
-def sync_iidx_stats(user_id: str, *, dj_name: str | None, dj_id: str | None) -> None:
-    """북마크릿이 수집한 DJ NAME / IIDX ID를 iidx.profiles에 반영한다.
+def sync_iidx_stats(
+    user_id: str,
+    *,
+    dj_name: str | None = None,
+    dj_id: str | None = None,
+    community_nickname: str | None = None,
+    play_count: int | None = None,
+    notes_radar: dict | None = None,
+    dan: dict | None = None,
+    arena_class: dict | None = None,
+) -> None:
+    """북마크릿이 수집한 IIDX 프로필(크롤러 Profile)을 iidx.profiles에 반영한다.
 
-    행이 없으면(미온보딩) 아무것도 하지 않는다 — 온보딩은 별도 흐름에서 처리.
+    전달된(None이 아닌) 필드만 갱신한다 — 부분 업데이트. iidx.profiles 행이 없으면
+    (미온보딩) upsert로 새로 만들어 온보딩한다 — 북마크릿 업로드가 곧 IIDX 온보딩이다.
+    새 행은 service_role=USER, is_public=true 등 컬럼 기본값을 따른다.
+    notes_radar/dan/arena_class는 {SP, DP} 구조의 dict를 그대로 jsonb 컬럼에 저장한다.
     """
-    if _fetch_svc(user_id) is None:
-        return
-    payload: dict = {}
+    payload: dict = {"user_id": user_id}
     if dj_name is not None:
         payload["dj_name"] = dj_name
     if dj_id is not None:
         payload["dj_id"] = dj_id
-    if payload:
-        get_supabase_iidx().table("profiles").update(payload).eq("user_id", user_id).execute()
+    if community_nickname is not None:
+        payload["community_nickname"] = community_nickname
+    if play_count is not None:
+        payload["play_count"] = play_count
+    if notes_radar is not None:
+        payload["notes_radar"] = notes_radar
+    if dan is not None:
+        payload["dan"] = dan
+    if arena_class is not None:
+        payload["arena_class"] = arena_class
+    # user_id 외에 실제 프로필 필드가 하나라도 있을 때만 기록(빈 온보딩 방지).
+    if len(payload) > 1:
+        get_supabase_iidx().table("profiles").upsert(payload, on_conflict="user_id").execute()
 
 
 def upsert_is_public(user_id: str, is_public: bool) -> None:
