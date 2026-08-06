@@ -11,10 +11,45 @@ N+1 쿼리를 피하려고 songs · charts 를 각각 한 번에 메모리로 �
 """
 
 import asyncio
+import re
+import unicodedata
 from dataclasses import dataclass
 
 from app.db.session import get_supabase_iidx
 from app.services.iidx.scores.parser import ChartScore
+
+# PostgREST 단일 응답 행 상한(기본 1000)을 우회하기 위한 페이지 크기.
+# songs·charts 는 이 상한을 넘으므로 반드시 페이지네이션으로 전량 로드해야 한다.
+_PAGE = 1000
+
+# loose 키에서 제거할 문자: 영숫자·히라가나·가타카나·한자(CJK) 이외 전부.
+# 괄호/대시/물결표/따옴표/공백 유무, 대소문자, ♥ 같은 장식문자를 무시하기 위함.
+_LOOSE_STRIP = re.compile(r"[^0-9a-z぀-ヿ一-鿿]")
+
+
+def _norm_title(t: str) -> str:
+    """타이틀 매칭용 정규화.
+
+    NFKC 로 호환문자(℃→°C, 전각 영숫자·기호→반각 등)를 통일하고 연속 공백을
+    한 칸으로 접는다. eagate CSV 와 textage 크롤 타이틀의 표기 차이를 흡수한다.
+    """
+    return " ".join(unicodedata.normalize("NFKC", t).split())
+
+
+def _loose_title(t: str) -> str:
+    """공격적 정규화 — 악센트 제거 + 소문자화 후 영숫자/가나/한자만 남긴다.
+
+    NFKD 로 분해해 결합 문자(악센트)를 떼어내므로 `Amor De Verão`↔`Amor De Verao`,
+    `Mächö Mönky`↔`Macho Monky` 같은 발음기호 차이까지 흡수한다. 또한 괄호·대시·
+    물결표 앞 공백 유무, 곡선/직선 따옴표, 대소문자, ♥ 같은 장식문자 차이도 무시한다
+    (예: `B4U(...)` vs `B4U (...)`, `LOVE SHINE` vs `LOVE♥SHINE`).
+
+    단 서로 다른 곡이 같은 키로 뭉개질 수 있으므로(`ACTØ`/`ACT` 등), 이 키는
+    songs 내에서 유일할 때만 매칭에 사용한다(_load_songs 참고).
+    """
+    decomposed = unicodedata.normalize("NFKD", t.lower())
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return _LOOSE_STRIP.sub("", stripped)
 
 
 @dataclass
@@ -32,39 +67,90 @@ class EnrichedScore:
 
 # ── DB 로드 헬퍼 ──────────────────────────────────────────────────────────────
 
-def _load_songs() -> dict[str, dict]:
-    """title → {id, genre, artist, version_name} 맵을 한 번에 로드한다."""
-    result = (
-        get_supabase_iidx()
-        .table("songs")
-        .select("id, title, genre, artist, versions(name)")
-        .execute()
-    )
-    songs: dict[str, dict] = {}
-    for row in result.data or []:
-        ver = row.get("versions")
-        songs[row["title"]] = {
-            "id": row["id"],
-            "genre": row.get("genre"),
-            "artist": row.get("artist"),
-            "version_name": ver["name"] if ver else None,
-        }
-    return songs
+def _load_songs() -> tuple[dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict]]:
+    """songs 전량을 로드해 (완전일치, 정규화, alias, loose) 4개 맵을 반환한다.
+
+    - exact: title → {id, genre, artist, version_name}
+    - norm : _norm_title(title) → 같은 값 (완전일치 실패 시 1차 폴백)
+    - alias: _norm_title(별칭) → 같은 값 (2차 폴백). songs.aliases 에 수동 등록한
+             eagate 표기를 정규화 키로 매핑한다.
+    - loose: _loose_title(title) → 같은 값 (최종 폴백). 단 서로 다른 곡이 같은
+             loose 키를 갖는 경우(충돌) 오매칭을 막기 위해 해당 키는 제외한다.
+
+    PostgREST 기본 1000행 상한을 넘기므로 반드시 페이지네이션으로 전량 로드한다.
+    exact/norm/alias 맵은 먼저 들어온 곡이 우선(중복 키는 무시)한다.
+    """
+    exact: dict[str, dict] = {}
+    norm: dict[str, dict] = {}
+    alias: dict[str, dict] = {}
+    loose: dict[str, dict] = {}
+    loose_conflicts: set[str] = set()  # 서로 다른 song_id가 물린 loose 키
+    db = get_supabase_iidx()
+    start = 0
+    while True:
+        rows = (
+            db.table("songs")
+            .select("id, title, aliases, genre, artist, versions(name)")
+            .range(start, start + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        for row in rows:
+            ver = row.get("versions")
+            info = {
+                "id": row["id"],
+                "genre": row.get("genre"),
+                "artist": row.get("artist"),
+                "version_name": ver["name"] if ver else None,
+            }
+            exact[row["title"]] = info
+            norm.setdefault(_norm_title(row["title"]), info)
+
+            for a in row.get("aliases") or []:
+                if a:
+                    alias.setdefault(_norm_title(a), info)
+
+            lk = _loose_title(row["title"])
+            if not lk:
+                continue
+            existing = loose.get(lk)
+            if existing is None:
+                loose[lk] = info
+            elif existing["id"] != info["id"]:
+                loose_conflicts.add(lk)
+        if len(rows) < _PAGE:
+            break
+        start += _PAGE
+    for lk in loose_conflicts:
+        loose.pop(lk, None)
+    return exact, norm, alias, loose
 
 
 def _load_charts(play_style: str) -> dict[tuple[str, str], dict]:
-    """(song_id, difficulty) → {id, level} 맵 (play_style 고정)."""
-    result = (
-        get_supabase_iidx()
-        .table("charts")
-        .select("id, song_id, difficulty, level")
-        .eq("play_style", play_style)
-        .execute()
-    )
-    return {
-        (row["song_id"], row["difficulty"]): row
-        for row in result.data or []
-    }
+    """(song_id, difficulty) → {id, level} 맵 (play_style 고정).
+
+    PostgREST 기본 1000행 상한을 넘기므로 페이지네이션으로 전량 로드한다.
+    """
+    charts: dict[tuple[str, str], dict] = {}
+    db = get_supabase_iidx()
+    start = 0
+    while True:
+        rows = (
+            db.table("charts")
+            .select("id, song_id, difficulty, level")
+            .eq("play_style", play_style)
+            .range(start, start + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        for row in rows:
+            charts[(row["song_id"], row["difficulty"])] = row
+        if len(rows) < _PAGE:
+            break
+        start += _PAGE
+    return charts
 
 
 # ── 공개 API ──────────────────────────────────────────────────────────────────
@@ -80,12 +166,20 @@ def enrich(
     - filled_version/genre/artist: is_crawled=True 이고 매칭 성공일 때만 채워짐.
     - level 보완: CSV 레벨이 0이고 charts 에 레벨이 있으면 charts.level 로 대체.
     """
-    songs = _load_songs()
+    exact, norm, alias, loose = _load_songs()
     charts = _load_charts(play_style)
 
     result: list[EnrichedScore] = []
     for s in scores:
-        song = songs.get(s.title)
+        # 완전일치 → NFKC 정규화 → 수동 alias → loose(구두점/공백/대소문자 무시) 순 폴백.
+        # alias(수동 등록)를 loose(퍼지)보다 우선해 명시적 매핑이 항상 이긴다.
+        norm_title = _norm_title(s.title)
+        song = (
+            exact.get(s.title)
+            or norm.get(norm_title)
+            or alias.get(norm_title)
+            or loose.get(_loose_title(s.title))
+        )
         song_id = song["id"] if song else None
 
         filled_version: str | None = None
