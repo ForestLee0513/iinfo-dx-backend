@@ -158,8 +158,15 @@ create index user_follows_followee_idx on public.user_follows (followee_id);
 
 create table iidx.profiles (
   user_id      uuid primary key references public.profiles(id) on delete cascade,
-  dj_name      text check (dj_name is null or dj_name ~ '^[A-Za-z0-9]{1,6}$'),
+  -- DJ NAME은 영숫자 외에 점/하이픈/공백도 쓰일 수 있어 허용한다 (예: "FRST-E").
+  dj_name      text check (dj_name is null or dj_name ~ '^[A-Za-z0-9 .-]{1,6}$'),
   dj_id        text check (dj_id   is null or dj_id   ~ '^[0-9]{4}-[0-9]{4}$'),
+  -- 북마크릿 프로필 크롤 결과 (크롤러 Profile 타입). 미크롤/미취득이면 null.
+  community_nickname text,                            -- 커뮤니티 닉네임 (#log-on)
+  play_count   integer check (play_count is null or play_count >= 0),  -- プレー回数
+  notes_radar  jsonb,                                 -- {SP:{notes..total}, DP:{...}}
+  dan          jsonb,                                 -- {SP:"10TH_DAN"|null, DP:...}
+  arena_class  jsonb,                                 -- {SP:"B4", DP:"---"}
   service_role text not null default 'USER'
                  check (service_role = any (array['USER', 'ADMIN'])),
   is_public    boolean not null default true,
