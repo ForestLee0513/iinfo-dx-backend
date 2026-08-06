@@ -4,9 +4,31 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.iidx.profile import IidxProfileUpload
+
+
+class CsvByStyle(BaseModel):
+    """스타일별 성적 CSV 문자열 (크롤러 DonePayload.csv). 최소 하나는 있어야 한다."""
+
+    SP: str | None = None
+    DP: str | None = None
+
+
+class ScoreUploadRequest(BaseModel):
+    """POST /iidx/scores/upload 요청 — SP/DP 성적과 프로필을 한 번에 보낸다.
+
+    쿼리 파라미터로 스타일을 나눠 두 번 호출하던 방식을 대체한다(토큰이 첫 호출에서
+    만료돼 두 번째가 실패하는 문제 해소). source는 백엔드가 CSV 내용으로 자동
+    판별하므로 참고용이며 저장에 사용하지 않는다.
+    """
+
+    csv: CsvByStyle
+    profile: IidxProfileUpload | None = None
+    source: str | None = None  # "score_download" 등 — 무시(자동 판별)
+
 
 class UploadResponse(BaseModel):
-    """POST /iidx/scores/upload 응답."""
+    """단일 스타일 업로드 결과."""
 
     upload_id: str
     play_style: str
@@ -14,6 +36,12 @@ class UploadResponse(BaseModel):
     song_count: int
     uploaded_at: datetime | None = None
     changed: bool        # False = 동일 내용, 스냅샷 미생성
+
+
+class MultiUploadResponse(BaseModel):
+    """POST /iidx/scores/upload 응답 — 업로드된 스타일별 결과 목록."""
+
+    results: list[UploadResponse]
 
 
 class SnapshotSummary(BaseModel):
