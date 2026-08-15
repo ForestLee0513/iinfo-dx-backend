@@ -6,22 +6,26 @@
   POST   /iidx/scores/restore/{upload_id}          — 스냅샷 복구
   GET    /iidx/scores?style=SP|DP                  — 현재 성적 조회
   GET    /iidx/scores/snapshots/{upload_id}/download — 원본 CSV 다운로드 URL
+  GET    /iidx/scores/summary?identifier=&style=&level= — 클리어 현황 요약
 """
 
 import asyncio
+import uuid
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.deps import CurrentUser, UploadUser
+from app.api.deps import CurrentUser, OptionalIdentity, UploadUser
 from app.core.openapi import PUBLIC
 from app.crud.account import profiles as crud_profiles
 from app.crud.iidx import scores as crud_scores
+from app.schemas.account.profile import HANDLE_PATTERN
 from app.schemas.iidx.scores import (
     ChartScoreItem,
     DownloadUrlResponse,
     MultiUploadResponse,
     RestoreResponse,
     ScoreListResponse,
+    ScoreSummaryResponse,
     ScoreUploadRequest,
     SnapshotListResponse,
     SnapshotSummary,
@@ -29,6 +33,7 @@ from app.schemas.iidx.scores import (
     UploadTokenResponse,
 )
 from app.services.iidx.scores import storage as score_storage, upload_token as _upload_token
+from app.services.iidx.scores.summary import build_score_summary
 from app.services.iidx.scores.upload import upload_score_csv
 
 router = APIRouter()
@@ -256,3 +261,54 @@ async def get_snapshot_download_url(upload_id: str, user: CurrentUser):
 
     url = await score_storage.get_signed_url_async(upload["storage_path"])
     return DownloadUrlResponse(url=url, expires_in=3600)
+
+
+def _resolve_identifier(identifier: str) -> dict | None:
+    """identifier(UUID 또는 handle)로 account 프로필 행을 찾는다. 없으면 None."""
+    try:
+        uuid.UUID(identifier)
+    except ValueError:
+        if not HANDLE_PATTERN.match(identifier):
+            return None
+        return crud_profiles.get_profile_row_by_handle(identifier)
+    return crud_profiles.get_profile_row(identifier)
+
+
+@router.get(
+    "/summary",
+    summary="클리어 현황 요약 (클리어 램프 비율)",
+    response_model=ScoreSummaryResponse,
+    openapi_extra=PUBLIC,
+)
+async def get_score_summary(
+    identity: OptionalIdentity,
+    identifier: str = Query(..., description="대상 유저의 UUID 또는 handle"),
+    style: str = Query(..., description="SP 또는 DP"),
+    level: int | None = Query(
+        None, ge=1, description="특정 레벨만 집계. 생략하면 해당 스타일 전체 레벨 합산"
+    ),
+):
+    """대상 유저의 현재 성적 스냅샷을 스타일/레벨 기준 클리어 램프 비율로 요약한다.
+
+    - identifier(UUID/handle)로 조회한 유저의 iidx.profiles 공개 여부를 따른다
+      (`GET /iidx/profile/{identifier}`와 동일한 규칙) — 비공개면 본인만 조회 가능,
+      IIDX 서비스 미가입이면 404.
+    - 성적 스냅샷이 없으면 total=0, 모든 카운트 0으로 응답한다(404 아님).
+    - `available_levels`는 level 필터와 무관하게 해당 스타일에 존재하는 전체
+      레벨 목록이라 FE가 난이도 선택 UI를 구성할 수 있다.
+    """
+    _check_style(style)
+    row = _resolve_identifier(identifier)
+    if row is None:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+
+    user_id = row["user_id"]
+    if not await asyncio.to_thread(crud_profiles.is_iidx_member, user_id):
+        raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
+
+    is_mine = identity is not None and identity.id == user_id
+    if not row.get("iidx_is_public", True) and not is_mine:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+
+    rows = await asyncio.to_thread(crud_scores.get_score_summary_rows, user_id, style)
+    return build_score_summary(rows, play_style=style, level=level)

@@ -152,6 +152,25 @@ def get_chart_scores(user_id: str, play_style: str) -> list[dict]:
     return result.data or []
 
 
+def get_score_summary_rows(user_id: str, play_style: str) -> list[dict]:
+    """현재 활성 스냅샷의 (level, clear_type)만 반환한다 — 클리어 현황 요약용.
+
+    스냅샷이 없으면 빈 목록.
+    """
+    current = get_current(user_id, play_style)
+    if not current:
+        return []
+    result = (
+        get_supabase_iidx()
+        .table("user_chart_scores")
+        .select("level, clear_type")
+        .eq("upload_id", current["upload_id"])
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return result.data or []
+
+
 def get_chart_scores_by_upload(upload_id: str, user_id: str) -> list[dict]:
     """특정 업로드의 성적 전체를 반환한다."""
     result = (
