@@ -111,3 +111,40 @@ class UploadTokenResponse(BaseModel):
 
     token: str
     expires_in: int  # 초 단위 유효 기간
+
+
+class ClearLampCounts(BaseModel):
+    """레벨/스타일 기준 클리어 램프별 채보 개수 (8종 표준 램프)."""
+
+    no_play: int = 0
+    failed: int = 0
+    assist_clear: int = 0
+    easy_clear: int = 0
+    clear: int = 0
+    hard_clear: int = 0
+    ex_hard_clear: int = 0
+    full_combo: int = 0
+
+
+class ClearLampPercentages(BaseModel):
+    """ClearLampCounts와 동일한 키의 비율(%, 소수 1자리). total=0이면 전부 0.0."""
+
+    no_play: float = 0.0
+    failed: float = 0.0
+    assist_clear: float = 0.0
+    easy_clear: float = 0.0
+    clear: float = 0.0
+    hard_clear: float = 0.0
+    ex_hard_clear: float = 0.0
+    full_combo: float = 0.0
+
+
+class ScoreSummaryResponse(BaseModel):
+    """GET /iidx/scores/summary 응답 — 클리어 램프 비율 요약."""
+
+    play_style: str
+    level: int | None = None  # None이면 스타일 전체 레벨 합산
+    total: int
+    counts: ClearLampCounts
+    percentages: ClearLampPercentages
+    available_levels: list[int]  # 이 유저·스타일에 존재하는 레벨 목록(선택 UI용)
