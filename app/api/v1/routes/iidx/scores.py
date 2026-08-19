@@ -7,10 +7,13 @@
   GET    /iidx/scores?style=SP|DP                  — 현재 성적 조회
   GET    /iidx/scores/snapshots/{upload_id}/download — 원본 CSV 다운로드 URL
   GET    /iidx/scores/summary?identifier=&style=&level= — 클리어 현황 요약
+  GET    /iidx/scores/upload-calendar?identifier=&style=&since=&until=&days=&tz= — 날짜별 업로드 횟수(기여도 그래프)
 """
 
 import asyncio
 import uuid
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -29,11 +32,13 @@ from app.schemas.iidx.scores import (
     ScoreUploadRequest,
     SnapshotListResponse,
     SnapshotSummary,
+    UploadCalendarResponse,
     UploadResponse,
     UploadTokenResponse,
 )
 from app.services.iidx.scores import storage as score_storage, upload_token as _upload_token
 from app.services.iidx.scores.summary import build_score_summary
+from app.services.iidx.scores.upload_calendar import build_upload_calendar
 from app.services.iidx.scores.upload import upload_score_csv
 
 router = APIRouter()
@@ -312,3 +317,76 @@ async def get_score_summary(
 
     rows = await asyncio.to_thread(crud_scores.get_score_summary_rows, user_id, style)
     return build_score_summary(rows, play_style=style, level=level)
+
+
+@router.get(
+    "/upload-calendar",
+    summary="날짜별 업로드 횟수 (기여도 그래프)",
+    response_model=UploadCalendarResponse,
+    openapi_extra=PUBLIC,
+)
+async def get_upload_calendar(
+    identity: OptionalIdentity,
+    identifier: str = Query(..., description="대상 유저의 UUID 또는 handle"),
+    style: str | None = Query(None, description="SP 또는 DP. 생략하면 SP+DP 합산"),
+    since: date | None = Query(
+        None, description="조회 시작 날짜(YYYY-MM-DD, tz 기준). 생략하면 until - (days-1)."
+    ),
+    until: date | None = Query(
+        None, description="조회 종료 날짜(YYYY-MM-DD, tz 기준). 생략하면 tz 기준 오늘."
+    ),
+    days: int = Query(
+        365, ge=1, le=366, description="since를 생략했을 때 until부터 과거로 집계할 일수"
+    ),
+    tz: str = Query(
+        "UTC",
+        description="집계 기준 IANA 타임존 (예: Asia/Seoul, Asia/Tokyo, America/New_York). "
+        "날짜 경계가 이 타임존 기준으로 정해지며 서머타임도 자동 반영된다.",
+    ),
+):
+    """대상 유저의 날짜별 업로드 횟수를 GitHub 기여도 그래프 형태로 반환한다.
+
+    - identifier(UUID/handle)로 조회한 유저의 iidx.profiles 공개 여부를 따른다
+      (`/summary`와 동일한 규칙) — 비공개면 본인만 조회 가능, IIDX 서비스
+      미가입이면 404.
+    - 날짜 경계는 `tz`(IANA 타임존, 기본 UTC) 기준이다. 일본/미국처럼
+      서머타임을 쓰는 지역이어도 zoneinfo가 해당 지역의 DST 규칙을 자동
+      반영하므로, 클라이언트는 자신의 로컬 타임존 이름만 넘기면 된다.
+    - `since`/`until`을 직접 지정할 수 있다. `until` 생략 시 tz 기준 오늘,
+      `since` 생략 시 `until - (days-1)`을 사용한다(둘 다 생략하면 기존처럼
+      tz 기준 오늘부터 `days`일 전까지). 업로드가 없는 날짜도 count=0으로
+      포함해 FE가 별도 gap-filling 없이 캘린더를 그릴 수 있게 한다.
+    - style을 생략하면 SP/DP 업로드를 합산한다.
+    """
+    if style is not None:
+        _check_style(style)
+    try:
+        zone = ZoneInfo(tz)
+    except ZoneInfoNotFoundError:
+        raise HTTPException(status_code=422, detail="유효하지 않은 타임존입니다.")
+
+    until_date = until if until is not None else datetime.now(tz=zone).date()
+    since_date = since if since is not None else until_date - timedelta(days=days - 1)
+    if since_date > until_date:
+        raise HTTPException(status_code=422, detail="since는 until보다 이전이거나 같아야 합니다.")
+    if (until_date - since_date).days + 1 > 3660:
+        raise HTTPException(status_code=422, detail="조회 기간이 너무 깁니다 (최대 3660일).")
+
+    row = _resolve_identifier(identifier)
+    if row is None:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+
+    user_id = row["user_id"]
+    if not await asyncio.to_thread(crud_profiles.is_iidx_member, user_id):
+        raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
+
+    is_mine = identity is not None and identity.id == user_id
+    if not row.get("iidx_is_public", True) and not is_mine:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+
+    since_utc = datetime.combine(since_date, time.min, tzinfo=zone).astimezone(timezone.utc)
+
+    rows = await asyncio.to_thread(crud_scores.get_upload_dates, user_id, style, since_utc)
+    return build_upload_calendar(
+        rows, style=style, tz=tz, since=since_date, until=until_date
+    )

@@ -171,6 +171,28 @@ def get_score_summary_rows(user_id: str, play_style: str) -> list[dict]:
     return result.data or []
 
 
+def get_upload_dates(
+    user_id: str, play_style: str | None = None, since: datetime | None = None
+) -> list[dict]:
+    """사용자의 업로드 시각 목록을 반환한다 — 업로드 기여도 그래프용.
+
+    play_style을 지정하면 해당 스타일만, 생략하면 SP/DP 전체를 반환한다.
+    since를 지정하면 그 시각 이후(포함) 업로드만 반환한다.
+    """
+    query = (
+        get_supabase_iidx()
+        .table("score_uploads")
+        .select("uploaded_at")
+        .eq("user_id", user_id)
+    )
+    if play_style is not None:
+        query = query.eq("play_style", play_style)
+    if since is not None:
+        query = query.gte("uploaded_at", since.isoformat())
+    result = query.execute()
+    return result.data or []
+
+
 def get_chart_scores_by_upload(upload_id: str, user_id: str) -> list[dict]:
     """특정 업로드의 성적 전체를 반환한다."""
     result = (
