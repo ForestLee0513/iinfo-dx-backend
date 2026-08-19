@@ -1,6 +1,6 @@
 """사용자 성적 업로드/스냅샷 API 스키마."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -148,3 +148,19 @@ class ScoreSummaryResponse(BaseModel):
     counts: ClearLampCounts
     percentages: ClearLampPercentages
     available_levels: list[int]  # 이 유저·스타일에 존재하는 레벨 목록(선택 UI용)
+
+
+class UploadCalendarResponse(BaseModel):
+    """GET /iidx/scores/upload-calendar 응답 — 날짜별 업로드 횟수(기여도 그래프용).
+
+    날짜 경계는 요청 시 넘긴 IANA 타임존(`tz`) 기준이다. zoneinfo가 해당
+    타임존의 서머타임 규칙을 자동 반영하므로, 일본/미국 등 서머타임을
+    쓰는 지역의 사용자도 자신의 로컬 캘린더와 맞는 결과를 받는다.
+    """
+
+    style: str | None = None  # None이면 SP/DP 합산
+    tz: str  # 집계에 사용된 IANA 타임존 (예: Asia/Seoul, America/New_York)
+    since: date  # 조회 시작 날짜 (tz 기준 년/월/일)
+    until: date  # 조회 종료 날짜 (tz 기준 년/월/일)
+    total: int
+    days: dict[date, int]  # "YYYY-MM-DD" -> 업로드 횟수. since~until 전체 날짜 포함(없으면 0)
