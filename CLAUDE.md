@@ -32,7 +32,7 @@ Single FastAPI app, but organized **MSA-style by domain to mirror the 2-schema D
 | Prefix | Route module | Role |
 |--------|-----------|------|
 | `/api/v1/auth`, `/api/v1/profile` | `routes/account/auth.py`, `routes/account/profile.py` | **Shared account layer** (public schema): auth (`/auth/...`, incl. `/auth/me`, cookie-based refresh) + profile read/update + follows (`/profile/...`). Serves every service, not just IIDX. |
-| `/api/v1/iidx/tables` | `routes/iidx/tables.py` | Public difficulty-table reads (`/tables`, `/tables/{slug}`). |
+| `/api/v1/iidx/tables` | `routes/iidx/tables.py` | Public difficulty-table reads (`/tables`, `/tables/{slug}`) + the 서열표 board (`/tables/{slug}/board`, see below). |
 | `/api/v1/iidx/crawl` | `routes/iidx/crawl.py` | Unified song-master + difficulty-table crawl API: `/targets`, `/preview` are public diagnostics (on `/docs`); `/jobs`, `/schedules[/{target_key}]` are `ADMIN`-only (**scheduler in `app/services/iidx/difficulty_crawl/scheduler.py`**). |
 | `/api/v1/admin`, `/api/v1/admin/auth` | `routes/admin/users.py`, `routes/admin/auth.py` | **Platform admin console** (governs all services, so *not* under `/iidx`): admin login/session (`/admin/auth/*`) + user list/detail, bans, role updates (`/admin/users*`). Operates on account-layer data (public schema); zero iidx dependency. Auth + `ADMIN`/`SUPER_ADMIN`. |
 | `/api/v1/iidx/admin` | `routes/iidx/admin_catalog.py` | IIDX catalog reads (songs/tables/versions), `ADMIN`-gated — IIDX service data, so stays under `/iidx`. |
@@ -74,6 +74,12 @@ The two crawl subsystems have **separate registries**: song crawlers (`services/
 - Full-line `//` comments in the JS files contain plausible-looking rows — strip them before parsing.
 
 textage is a single-maintainer hobby site — two file fetches per weekly run, nothing more aggressive.
+
+### 서열표 (difficulty-table board)
+
+`GET /api/v1/iidx/tables/{slug}/board?identifier=&opponent=` (`routes/iidx/tables.py` → `services/iidx/tables/board.py`) is the FE 서열표 화면의 단일 엔드포인트 — 표 엔트리를 등급/유형(지력·개인차) 섹션으로 묶고 각 줄에 클리어 램프를 얹는다. **한 응답 형태로 3가지 화면을 모두 커버**한다: 비로그인(파라미터 없음 → `user=null`, 모든 `score=null`, 곡 목록만), 로그인 본인(`identifier` 생략 시 토큰의 사용자), 사용자 비교(`opponent` 지정 → `opponent_score` + `comparison` 승/패/무·승률). `identifier`/`opponent` 가시성 규칙은 `/iidx/scores/summary`와 동일(미가입·비공개 404), 단 `identifier` 생략 시의 본인 조회만 미온보딩이어도 404 없이 램프만 비게 둔다.
+
+`difficulty_entries.chart_id`는 **아직 아무 코드도 채우지 않는다**(sync RPC가 null로 넣고 후속 파이프라인 없음). 그래서 엔트리↔성적 매칭은 chart_id가 아니라 **(타이틀, 난이도)** 로 하며, 성적 매처와 같은 정규화 헬퍼(`services/iidx/scores/matcher.py`의 `norm_title`/`loose_title`)를 재사용한다 — 완전일치 → NFKC → loose 폴백. loose 키가 겹치는 곡은 오매칭 방지를 위해 제외하므로 일부 엔트리는 `score=null`로 남는다. 램프 정규화·서열은 `services/iidx/scores/summary.py`의 `normalize_lamp`/`LAMP_KEYS`(약한 순 = FE `CLEAR_LAMP_ORDER`)를 그대로 쓴다. 표 엔트리도 사용자 성적도 PostgREST 1000행 상한을 넘기므로 `crud/iidx/tables.fetch_entries`·`crud/iidx/scores.get_board_score_rows`는 반드시 페이지네이션으로 전량 로드한다(임베드 조회인 `fetch_table`은 잘릴 수 있어 board 경로에서 쓰지 않는다).
 
 ### Google Sheets parser gotcha
 

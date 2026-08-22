@@ -17,6 +17,9 @@ _TABLE_META_COLUMNS = (
     "slug, name, source, play_style, rating_type, level, grades, updated_at"
 )
 
+# PostgREST 단일 응답 행 상한(기본 1000)을 우회하기 위한 페이지 크기.
+_PAGE = 1000
+
 
 def fetch_tables() -> list[dict]:
     """모든 난이도표 메타데이터 목록 (엔트리 제외)."""
@@ -45,6 +48,47 @@ def fetch_table(slug: str) -> dict | None:
     )
     rows = res.data
     return rows[0] if rows else None
+
+
+def fetch_table_meta(slug: str) -> dict | None:
+    """slug로 표 1개의 메타데이터만 조회(엔트리 제외). 없으면 None.
+
+    엔트리는 표 하나가 1000행을 넘길 수 있어 PostgREST 임베드(fetch_table)로는
+    잘릴 수 있으므로, 서열표 조회는 이 함수 + fetch_entries 조합을 쓴다.
+    """
+    res = (
+        get_supabase_iidx()
+        .table("difficulty_tables")
+        .select("*")
+        .eq("slug", slug)
+        .limit(1)
+        .execute()
+    )
+    rows = res.data
+    return rows[0] if rows else None
+
+
+def fetch_entries(table_id: str) -> list[dict]:
+    """표에 속한 엔트리 전체를 페이지네이션으로 모두 가져온다."""
+    db = get_supabase_iidx()
+    entries: list[dict] = []
+    start = 0
+    while True:
+        rows = (
+            db.table("difficulty_entries")
+            .select("*")
+            .eq("table_id", table_id)
+            .order("id")
+            .range(start, start + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        entries.extend(rows)
+        if len(rows) < _PAGE:
+            break
+        start += _PAGE
+    return entries
 
 
 # ── 엔트리 정렬 (어드민 상세 조회용, 메모리 내 정렬) ──────────────
