@@ -116,6 +116,7 @@ def upsert_current(user_id: str, play_style: str, upload_id: str) -> dict:
 # ── user_chart_scores ─────────────────────────────────────────────────────────
 
 _CHUNK = 500  # PostgREST 단일 요청 권장 상한
+_PAGE = 1000  # PostgREST 단일 응답 행 상한(기본값) — 조회 페이지네이션용
 
 
 def insert_chart_scores(
@@ -169,6 +170,37 @@ def get_score_summary_rows(user_id: str, play_style: str) -> list[dict]:
         .execute()
     )
     return result.data or []
+
+
+def get_board_score_rows(user_id: str, play_style: str) -> list[dict]:
+    """현재 활성 스냅샷의 서열표 표시용 성적 행 전체를 반환한다.
+
+    난이도표 엔트리와 타이틀·난이도로 매칭하기 위한 최소 컬럼만 가져오되,
+    한 스냅샷은 1000행을 훌쩍 넘기므로 반드시 페이지네이션으로 전량 로드한다.
+    스냅샷이 없으면 빈 목록.
+    """
+    current = get_current(user_id, play_style)
+    if not current:
+        return []
+    db = get_supabase_iidx()
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = (
+            db.table("user_chart_scores")
+            .select("title, difficulty, level, clear_type, dj_level, ex_score, last_played_at")
+            .eq("upload_id", current["upload_id"])
+            .eq("user_id", user_id)
+            .range(start, start + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(page)
+        if len(page) < _PAGE:
+            break
+        start += _PAGE
+    return rows
 
 
 def get_upload_dates(

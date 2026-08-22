@@ -27,7 +27,7 @@ _PAGE = 1000
 _LOOSE_STRIP = re.compile(r"[^0-9a-z぀-ヿ一-鿿]")
 
 
-def _norm_title(t: str) -> str:
+def norm_title(t: str) -> str:
     """타이틀 매칭용 정규화.
 
     NFKC 로 호환문자(℃→°C, 전각 영숫자·기호→반각 등)를 통일하고 연속 공백을
@@ -36,7 +36,7 @@ def _norm_title(t: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", t).split())
 
 
-def _loose_title(t: str) -> str:
+def loose_title(t: str) -> str:
     """공격적 정규화 — 악센트 제거 + 소문자화 후 영숫자/가나/한자만 남긴다.
 
     NFKD 로 분해해 결합 문자(악센트)를 떼어내므로 `Amor De Verão`↔`Amor De Verao`,
@@ -71,10 +71,10 @@ def _load_songs() -> tuple[dict[str, dict], dict[str, dict], dict[str, dict], di
     """songs 전량을 로드해 (완전일치, 정규화, alias, loose) 4개 맵을 반환한다.
 
     - exact: title → {id, genre, artist, version_name}
-    - norm : _norm_title(title) → 같은 값 (완전일치 실패 시 1차 폴백)
-    - alias: _norm_title(별칭) → 같은 값 (2차 폴백). songs.aliases 에 수동 등록한
+    - norm : norm_title(title) → 같은 값 (완전일치 실패 시 1차 폴백)
+    - alias: norm_title(별칭) → 같은 값 (2차 폴백). songs.aliases 에 수동 등록한
              eagate 표기를 정규화 키로 매핑한다.
-    - loose: _loose_title(title) → 같은 값 (최종 폴백). 단 서로 다른 곡이 같은
+    - loose: loose_title(title) → 같은 값 (최종 폴백). 단 서로 다른 곡이 같은
              loose 키를 갖는 경우(충돌) 오매칭을 막기 위해 해당 키는 제외한다.
 
     PostgREST 기본 1000행 상한을 넘기므로 반드시 페이지네이션으로 전량 로드한다.
@@ -105,13 +105,13 @@ def _load_songs() -> tuple[dict[str, dict], dict[str, dict], dict[str, dict], di
                 "version_name": ver["name"] if ver else None,
             }
             exact[row["title"]] = info
-            norm.setdefault(_norm_title(row["title"]), info)
+            norm.setdefault(norm_title(row["title"]), info)
 
             for a in row.get("aliases") or []:
                 if a:
-                    alias.setdefault(_norm_title(a), info)
+                    alias.setdefault(norm_title(a), info)
 
-            lk = _loose_title(row["title"])
+            lk = loose_title(row["title"])
             if not lk:
                 continue
             existing = loose.get(lk)
@@ -173,12 +173,12 @@ def enrich(
     for s in scores:
         # 완전일치 → NFKC 정규화 → 수동 alias → loose(구두점/공백/대소문자 무시) 순 폴백.
         # alias(수동 등록)를 loose(퍼지)보다 우선해 명시적 매핑이 항상 이긴다.
-        norm_title = _norm_title(s.title)
+        nt_key = norm_title(s.title)
         song = (
             exact.get(s.title)
-            or norm.get(norm_title)
-            or alias.get(norm_title)
-            or loose.get(_loose_title(s.title))
+            or norm.get(nt_key)
+            or alias.get(nt_key)
+            or loose.get(loose_title(s.title))
         )
         song_id = song["id"] if song else None
 
