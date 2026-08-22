@@ -102,14 +102,17 @@ def _section_id(grade: str | None, rating: float | None, table_type: str | None)
 def _section_sort_key(
     key: tuple[str | None, float | None, str | None], grade_rank: dict[str, int]
 ) -> tuple:
-    """섹션 정렬 기준.
+    """섹션 정렬 기준 — 등급/레이팅 모두 **높은 쪽부터** 내려온다.
 
-    - GRADE 표: 표가 선언한 grades[] 서열 순서(알파벳순 아님). 목록에 없는 등급은 뒤로.
+    - GRADE 표: 표가 선언한 grades[]는 약한 순(예: F..S+)이므로 그 서열의 역순
+      (알파벳순 아님). 목록에 없는 등급은 뒤로.
     - NUMERIC 표: rating 내림차순(높은 난이도부터).
     같은 등급/레이팅 안에서는 지력 → 개인차 → 미분류 순.
     """
     grade, rating, table_type = key
-    grade_order = grade_rank.get(grade or "", len(grade_rank))
+    # 미상 등급은 항상 뒤로 보내기 위해 (분류됨=0, 미분류=1) 플래그를 앞에 둔다.
+    known = grade in grade_rank if grade is not None else False
+    grade_order = (0, -grade_rank[grade]) if known else (1, 0)
     rating_order = -rating if rating is not None else float("inf")
     return (grade_order, rating_order, _TABLE_TYPE_ORDER.get(table_type or "", 2))
 

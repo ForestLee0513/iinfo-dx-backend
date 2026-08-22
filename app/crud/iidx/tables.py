@@ -106,6 +106,16 @@ _DIFFICULTY_ORDER = {
 }
 
 
+def sort_entries_by_rank(table: dict) -> None:
+    """표 상세 조회의 기본 정렬 — 등급/레이팅이 **높은 순 → 낮은 순**.
+
+    GRADE 표는 grades[]가 약한 순(예: F..S+)으로 저장되므로 그 서열의 역순,
+    NUMERIC 표는 rating 내림차순으로 정렬한다. 등급/레이팅이 없는 엔트리는 뒤로.
+    """
+    sort = "grade" if (table.get("rating_type") == "GRADE") else "rating"
+    sort_table_entries(table, sort, "desc")
+
+
 def sort_table_entries(table: dict, sort: str, order: str) -> None:
     """table["difficulty_entries"]를 지정 기준으로 제자리 정렬한다.
 
