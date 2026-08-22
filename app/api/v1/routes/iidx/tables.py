@@ -18,7 +18,13 @@ from app.api.deps import OptionalIdentity
 from app.core.openapi import PUBLIC
 from app.crud.account import profiles as crud_profiles
 from app.crud.iidx import scores as crud_scores
-from app.crud.iidx.tables import fetch_entries, fetch_table, fetch_table_meta, fetch_tables
+from app.crud.iidx.tables import (
+    fetch_entries,
+    fetch_table,
+    fetch_table_meta,
+    fetch_tables,
+    sort_entries_by_rank,
+)
 from app.schemas.account.profile import HANDLE_PATTERN
 from app.schemas.iidx.table import (
     BoardUser,
@@ -41,6 +47,8 @@ def get_table(slug: str):
     table = fetch_table(slug)
     if table is None:
         raise HTTPException(status_code=404, detail=f"표를 찾을 수 없습니다: {slug}")
+    # 등급형/숫자형 모두 높은 난이도부터 내려오도록 정렬해서 내려준다.
+    sort_entries_by_rank(table)
     return table
 
 
