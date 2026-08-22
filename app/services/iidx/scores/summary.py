@@ -37,7 +37,7 @@ _RAW_TO_LAMP = {
 }
 
 
-def _normalize_lamp(clear_type: str | None) -> str:
+def normalize_lamp(clear_type: str | None) -> str:
     if clear_type is None:
         return "no_play"
     key = " ".join(clear_type.strip().upper().split())
@@ -61,7 +61,7 @@ def build_score_summary(
 
     counts = {k: 0 for k in LAMP_KEYS}
     for r in filtered:
-        lamp = _normalize_lamp(r.get("clear_type"))
+        lamp = normalize_lamp(r.get("clear_type"))
         counts[lamp] += 1
 
     total = len(filtered)
