@@ -114,7 +114,11 @@ class UploadTokenResponse(BaseModel):
 
 
 class ClearLampCounts(BaseModel):
-    """레벨/스타일 기준 클리어 램프별 채보 개수 (8종 표준 램프)."""
+    """레벨/스타일 기준 클리어 램프별 채보 개수 (8종 표준 램프).
+
+    모수는 곡 마스터의 현역 채보 전체라, `no_play`에는 사용자 CSV에 아예
+    없는 채보도 포함된다.
+    """
 
     no_play: int = 0
     failed: int = 0
@@ -144,10 +148,10 @@ class ScoreSummaryResponse(BaseModel):
 
     play_style: str
     level: int | None = None  # None이면 스타일 전체 레벨 합산
-    total: int
+    total: int  # 곡 마스터 기준 해당 스타일/레벨의 현역 채보 수(=비율 모수)
     counts: ClearLampCounts
     percentages: ClearLampPercentages
-    available_levels: list[int]  # 이 유저·스타일에 존재하는 레벨 목록(선택 UI용)
+    available_levels: list[int]  # 곡 마스터에 채보가 있는 레벨 목록(선택 UI용)
 
 
 class UploadCalendarResponse(BaseModel):

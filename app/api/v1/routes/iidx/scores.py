@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.api.deps import CurrentUser, OptionalIdentity, UploadUser
 from app.core.openapi import PUBLIC
 from app.crud.account import profiles as crud_profiles
-from app.crud.iidx import scores as crud_scores
+from app.crud.iidx import charts as crud_charts, scores as crud_scores
 from app.schemas.account.profile import HANDLE_PATTERN
 from app.schemas.iidx.scores import (
     ChartScoreItem,
@@ -298,9 +298,12 @@ async def get_score_summary(
     - identifier(UUID/handle)로 조회한 유저의 iidx.profiles 공개 여부를 따른다
       (`GET /iidx/profile/{identifier}`와 동일한 규칙) — 비공개면 본인만 조회 가능,
       IIDX 서비스 미가입이면 404.
-    - 성적 스냅샷이 없으면 total=0, 모든 카운트 0으로 응답한다(404 아님).
-    - `available_levels`는 level 필터와 무관하게 해당 스타일에 존재하는 전체
-      레벨 목록이라 FE가 난이도 선택 UI를 구성할 수 있다.
+    - 비율의 **모수는 업로드한 CSV 행 수가 아니라 곡 마스터의 현역 채보
+      전체**(iidx.charts, in_ac=true)다. 따라서 CSV에 없는 채보도 NO PLAY로
+      집계되어, "게임 전체 대비 클리어 현황"이 된다.
+    - 성적 스냅샷이 없으면 전부 NO PLAY(=100%)로 응답한다(404 아님).
+    - `available_levels`는 level 필터와 무관하게 해당 스타일에 채보가 존재하는
+      전체 레벨 목록이라 FE가 난이도 선택 UI를 구성할 수 있다.
     """
     _check_style(style)
     row = _resolve_identifier(identifier)
@@ -316,7 +319,10 @@ async def get_score_summary(
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
     rows = await asyncio.to_thread(crud_scores.get_score_summary_rows, user_id, style)
-    return build_score_summary(rows, play_style=style, level=level)
+    chart_totals = await asyncio.to_thread(crud_charts.count_charts_by_level, style)
+    return build_score_summary(
+        rows, play_style=style, level=level, chart_totals=chart_totals
+    )
 
 
 @router.get(
