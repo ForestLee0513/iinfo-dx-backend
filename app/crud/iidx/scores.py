@@ -156,20 +156,32 @@ def get_chart_scores(user_id: str, play_style: str) -> list[dict]:
 def get_score_summary_rows(user_id: str, play_style: str) -> list[dict]:
     """현재 활성 스냅샷의 (level, clear_type)만 반환한다 — 클리어 현황 요약용.
 
+    한 스냅샷은 PostgREST 기본 상한(1000행)을 훌쩍 넘기므로 반드시
+    페이지네이션으로 전량 로드한다(잘리면 램프 개수가 그대로 누락된다).
     스냅샷이 없으면 빈 목록.
     """
     current = get_current(user_id, play_style)
     if not current:
         return []
-    result = (
-        get_supabase_iidx()
-        .table("user_chart_scores")
-        .select("level, clear_type")
-        .eq("upload_id", current["upload_id"])
-        .eq("user_id", user_id)
-        .execute()
-    )
-    return result.data or []
+    db = get_supabase_iidx()
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = (
+            db.table("user_chart_scores")
+            .select("level, clear_type")
+            .eq("upload_id", current["upload_id"])
+            .eq("user_id", user_id)
+            .range(start, start + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(page)
+        if len(page) < _PAGE:
+            break
+        start += _PAGE
+    return rows
 
 
 def get_board_score_rows(user_id: str, play_style: str) -> list[dict]:
