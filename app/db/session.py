@@ -33,20 +33,26 @@ _MAX_RETRIES = 1
 
 
 def _install_disconnect_retry(session: httpx.Client) -> None:
-    """postgrest가 쓰는 httpx 세션의 request를 감싸 연결 끊김 시 1회 재시도한다.
+    """postgrest가 쓰는 httpx 세션의 request를 감싸 연결 끊김/PGRST303 시 1회 재시도한다.
 
     호출부(crud/*)를 손대지 않고 모든 Supabase 데이터 접근을 한 곳에서 견고화한다.
     주의: 서버가 요청을 처리(commit)한 직후 응답 전에 끊긴 경우, insert류는
     재시도로 중복 적용될 수 있다. 다만 대부분의 끊김은 유휴 stale 커넥션에
     요청을 보내는 시점(서버 처리 전)에 발생하고, 크롤 RPC는 upsert/전량교체라
     멱등하므로 실무상 안전하다.
+
+    PGRST303("JWT issued at future")은 우리 쪽 키가 잘못된 게 아니라 Supabase
+    엣지의 PostgREST 인스턴스 간 시계 오차로 간헐적으로 발생하는 것으로 알려진
+    현상이다(동일한 고정 service-role 키로 어떤 요청은 성공하고 어떤 요청은
+    실패). 애플리케이션 재시도 외에 우리 쪽에서 고칠 수 있는 원인이 아니므로
+    같은 방식으로 1회 재시도한다.
     """
     original_request = session.request
 
     def request_with_retry(*args, **kwargs):
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                return original_request(*args, **kwargs)
+                response = original_request(*args, **kwargs)
             except _RETRYABLE as exc:
                 if attempt == _MAX_RETRIES:
                     raise
@@ -54,8 +60,28 @@ def _install_disconnect_retry(session: httpx.Client) -> None:
                     "Supabase 연결 끊김, 재시도(%d/%d): %s",
                     attempt + 1, _MAX_RETRIES, exc,
                 )
+                continue
+
+            if attempt < _MAX_RETRIES and _is_jwt_future_error(response):
+                logger.warning(
+                    "Supabase JWT 시계 오차(PGRST303), 재시도(%d/%d)",
+                    attempt + 1, _MAX_RETRIES,
+                )
+                continue
+            return response
 
     session.request = request_with_retry
+
+
+def _is_jwt_future_error(response: httpx.Response) -> bool:
+    """PostgREST가 'JWT issued at future'(PGRST303)로 응답했는지 확인한다."""
+    if response.status_code != 400:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("code") == "PGRST303"
 
 
 def _create_client(schema: str) -> Client:
