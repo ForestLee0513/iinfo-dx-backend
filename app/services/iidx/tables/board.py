@@ -79,6 +79,22 @@ def _to_score(row: dict | None) -> BoardScore | None:
     )
 
 
+def _needs_previous_fallback(score: BoardScore | None) -> bool:
+    """clear_lamp는 no_play가 아닌데 ex_score가 0인 이상 행인지 — 이번 작에서
+    실제로는 플레이하지 않은 것으로 보고 직전 CSV 폴백을 시도할 대상."""
+    return score is not None and score.clear_lamp != "no_play" and not score.ex_score
+
+
+def _with_previous_fallback(
+    score: BoardScore | None, title: str, difficulty: str, previous_index: ScoreIndex | None
+) -> BoardScore | None:
+    """이상 행이면 직전 CSV에서 실제 플레이 기록을 찾아 대신 쓴다. 못 찾으면 원래 값 그대로."""
+    if previous_index is None or not _needs_previous_fallback(score):
+        return score
+    fallback = _to_score(previous_index.find(title, difficulty))
+    return fallback if fallback is not None else score
+
+
 def _section_key(entry: dict) -> tuple[str | None, float | None, str | None]:
     rating = entry.get("rating")
     return (
@@ -125,14 +141,23 @@ def build_table_board(
     opponent: BoardUser | None,
     my_rows: list[dict] | None,
     opponent_rows: list[dict] | None,
+    my_previous_rows: list[dict] | None = None,
+    opponent_previous_rows: list[dict] | None = None,
 ) -> TableBoardResponse:
     """표 메타 + 엔트리 + (선택) 성적으로 서열표 응답을 만든다.
 
     my_rows / opponent_rows가 None이면 그 쪽 램프는 전부 null이 된다
     (비로그인 조회 = 곡 목록만 내려주는 경우).
+
+    my_previous_rows / opponent_previous_rows는 각각 직전 CSV 스냅샷 — 현재
+    스냅샷에서 clear_lamp가 no_play가 아닌데 ex_score가 0인 이상 행을 보정할 때만 쓴다.
     """
     my_index = ScoreIndex(my_rows) if my_rows is not None else None
     opp_index = ScoreIndex(opponent_rows) if opponent_rows is not None else None
+    my_previous_index = ScoreIndex(my_previous_rows) if my_previous_rows is not None else None
+    opp_previous_index = (
+        ScoreIndex(opponent_previous_rows) if opponent_previous_rows is not None else None
+    )
 
     grade_rank = {g: i for i, g in enumerate(table.get("grades") or [])}
     grouped: dict[tuple[str | None, float | None, str | None], list[BoardEntry]] = {}
@@ -146,8 +171,12 @@ def build_table_board(
         my_row = my_index.find(title, difficulty) if my_index is not None else None
         opp_row = opp_index.find(title, difficulty) if opp_index is not None else None
 
-        my_score = _to_score(my_row)
-        opp_score = _to_score(opp_row) if opp_index is not None else None
+        my_score = _with_previous_fallback(_to_score(my_row), title, difficulty, my_previous_index)
+        opp_score = (
+            _with_previous_fallback(_to_score(opp_row), title, difficulty, opp_previous_index)
+            if opp_index is not None
+            else None
+        )
 
         # 비교 집계 — 양쪽 모두 성적이 없는(=둘 다 곡 매칭 실패) 엔트리는 제외하고,
         # 한쪽만 없는 경우는 NO PLAY로 간주해 승패를 가린다.
