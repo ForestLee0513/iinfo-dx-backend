@@ -184,24 +184,15 @@ def get_score_summary_rows(user_id: str, play_style: str) -> list[dict]:
     return rows
 
 
-def get_board_score_rows(user_id: str, play_style: str) -> list[dict]:
-    """현재 활성 스냅샷의 서열표 표시용 성적 행 전체를 반환한다.
-
-    난이도표 엔트리와 타이틀·난이도로 매칭하기 위한 최소 컬럼만 가져오되,
-    한 스냅샷은 1000행을 훌쩍 넘기므로 반드시 페이지네이션으로 전량 로드한다.
-    스냅샷이 없으면 빈 목록.
-    """
-    current = get_current(user_id, play_style)
-    if not current:
-        return []
-    db = get_supabase_iidx()
+def _fetch_board_rows(db, upload_id: str, user_id: str) -> list[dict]:
+    """서열표 매칭용 최소 컬럼을 한 업로드에서 페이지네이션으로 전량 로드한다."""
     rows: list[dict] = []
     start = 0
     while True:
         page = (
             db.table("user_chart_scores")
             .select("title, difficulty, level, clear_type, dj_level, ex_score, last_played_at")
-            .eq("upload_id", current["upload_id"])
+            .eq("upload_id", upload_id)
             .eq("user_id", user_id)
             .range(start, start + _PAGE - 1)
             .execute()
@@ -213,6 +204,55 @@ def get_board_score_rows(user_id: str, play_style: str) -> list[dict]:
             break
         start += _PAGE
     return rows
+
+
+def get_board_score_rows(user_id: str, play_style: str) -> list[dict]:
+    """현재 활성 스냅샷의 서열표 표시용 성적 행 전체를 반환한다.
+
+    난이도표 엔트리와 타이틀·난이도로 매칭하기 위한 최소 컬럼만 가져오되,
+    한 스냅샷은 1000행을 훌쩍 넘기므로 반드시 페이지네이션으로 전량 로드한다.
+    스냅샷이 없으면 빈 목록.
+    """
+    current = get_current(user_id, play_style)
+    if not current:
+        return []
+    return _fetch_board_rows(get_supabase_iidx(), current["upload_id"], user_id)
+
+
+def get_previous_board_score_rows(user_id: str, play_style: str) -> list[dict]:
+    """현재 활성 스냅샷보다 먼저 업로드된 가장 최근 CSV의 서열표용 성적 행을 반환한다.
+
+    현재 스냅샷에서 clear_lamp가 no_play가 아닌데 ex_score가 0인 이상 행은
+    사실상 "이번 작에서 아직 플레이하지 않음"으로 보고, 직전 CSV에 남아있는
+    실제 플레이 기록으로 보정하기 위한 폴백 조회용. 직전 스냅샷이 없으면 빈 목록.
+    """
+    current = get_current(user_id, play_style)
+    if not current:
+        return []
+    db = get_supabase_iidx()
+    current_upload = (
+        db.table("score_uploads")
+        .select("uploaded_at")
+        .eq("id", current["upload_id"])
+        .maybe_single()
+        .execute()
+    )
+    if not current_upload or not current_upload.data:
+        return []
+    prev_result = (
+        db.table("score_uploads")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("play_style", play_style)
+        .lt("uploaded_at", current_upload.data["uploaded_at"])
+        .order("uploaded_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    prev_uploads = prev_result.data or []
+    if not prev_uploads:
+        return []
+    return _fetch_board_rows(db, prev_uploads[0]["id"], user_id)
 
 
 def get_upload_dates(

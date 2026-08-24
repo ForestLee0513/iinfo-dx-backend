@@ -95,6 +95,18 @@ async def _score_rows(user: BoardUser | None, play_style: str) -> list[dict] | N
     )
 
 
+async def _previous_score_rows(user: BoardUser | None, play_style: str) -> list[dict] | None:
+    """대상이 있으면 직전 CSV 스냅샷의 성적 행을, 없으면 None을 반환한다.
+
+    clear_lamp가 no_play가 아닌데 ex_score가 0인 이상 행을 보정하는 폴백 조회용.
+    """
+    if user is None:
+        return None
+    return await asyncio.to_thread(
+        crud_scores.get_previous_board_score_rows, user.user_id, play_style
+    )
+
+
 @router.get(
     "/{slug}/board",
     summary="난이도표 서열표 (클리어 램프 / 사용자 비교)",
@@ -158,10 +170,12 @@ async def get_table_board(
     )
 
     play_style = table["play_style"]
-    entries, my_rows, opponent_rows = await asyncio.gather(
+    entries, my_rows, opponent_rows, my_previous_rows, opponent_previous_rows = await asyncio.gather(
         asyncio.to_thread(fetch_entries, table["id"]),
         _score_rows(user, play_style),
         _score_rows(opponent_user, play_style),
+        _previous_score_rows(user, play_style),
+        _previous_score_rows(opponent_user, play_style),
     )
 
     return build_table_board(
@@ -171,4 +185,6 @@ async def get_table_board(
         opponent=opponent_user,
         my_rows=my_rows,
         opponent_rows=opponent_rows,
+        my_previous_rows=my_previous_rows,
+        opponent_previous_rows=opponent_previous_rows,
     )
