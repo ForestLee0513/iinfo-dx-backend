@@ -1,8 +1,10 @@
-"""admin 카탈로그 조회 라우터 (/admin/*) — 지금까지 등록된 서열표·곡 조회.
+"""admin 카탈로그 조회 라우터 (/admin/*) — 지금까지 등록된 서열표·곡 조회 + 회원 IIDX 프로필.
 
 - 서열표(난이도표): GET /tables (목록), GET /tables/{slug} (상세 + 엔트리)
 - 곡 마스터: GET /songs (목록, 검색/필터/페이지네이션), GET /songs/{song_id} (상세 + 채보)
 - 버전: GET /versions (곡 필터 드롭다운용 버전 목록)
+- 회원 IIDX 프로필: GET /users/{user_id} (dj_name/dan 등 — 계정 계층 상세는
+  GET /admin/users/{id}가 별도로 담당, app/api/v1/routes/admin/users.py 참고)
 
 읽기 전용 — 데이터는 크롤링 스케줄러/수동 잡으로만 갱신된다(app/api/v1/endpoints/crawl.py).
 서열표 읽기는 공개 API(/iidx/tables)와 동일한 crud_tables를 재사용하되 어드민 인증 뒤에 둔다.
@@ -15,7 +17,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import AdminUser
-from app.crud.iidx import songs as crud_songs, tables as crud_tables
+from app.crud.iidx import profiles as crud_iidx_profiles, songs as crud_songs, tables as crud_tables
+from app.schemas.iidx.profile import AdminIidxProfileDetail
 from app.schemas.iidx.song import SongDetail, SongListResponse, VersionListResponse
 from app.schemas.iidx.table import TableDetail, TableListResponse
 
@@ -104,3 +107,21 @@ async def get_song(song_id: str, _: AdminUser):
     if song is None:
         raise HTTPException(status_code=404, detail=f"곡을 찾을 수 없습니다: {song_id}")
     return song
+
+
+# ── 회원 IIDX 서비스 프로필 조회 ─────────────────────────────
+
+
+@router.get("/users/{user_id}", response_model=AdminIidxProfileDetail)
+async def get_user_iidx_profile(user_id: str, _: AdminUser):
+    """어드민 회원 상세용 IIDX 서비스 프로필.
+
+    계정 계층 정보(핸들/정지 이력 등)는 GET /admin/users/{id}가 반환하므로,
+    이 엔드포인트는 IIDX 서비스 전용 필드만 담당한다. auth.users 자체의 존재
+    여부는 확인하지 않는다(그건 계정 계층 엔드포인트의 책임) — 여기서는 단순히
+    iidx.profiles 행의 유무(온보딩 여부)만 본다.
+    """
+    row = await asyncio.to_thread(crud_iidx_profiles.get_profile_row, user_id)
+    if row is None:
+        return AdminIidxProfileDetail(onboarded=False)
+    return AdminIidxProfileDetail(onboarded=True, **row)

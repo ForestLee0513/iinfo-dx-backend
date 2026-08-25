@@ -53,3 +53,23 @@ class IidxProfileUpload(BaseModel):
     notesRadar: NotesRadar | None = None
     dan: DanByStyle | None = None
     arenaClass: ArenaClassByStyle | None = None
+
+
+class AdminIidxProfileDetail(BaseModel):
+    """GET /iidx/admin/users/{user_id} 응답 — IIDX 서비스 전용 프로필.
+
+    계정 계층 정보(핸들/소셜링크/정지 이력 등)는 GET /admin/users/{id}가 이미
+    반환하므로 여기서는 중복하지 않는다. onboarded=False면 iidx.profiles 행이
+    아직 없는 상태(서비스 미가입)라 나머지 필드는 모두 기본값/None이다.
+    """
+
+    onboarded: bool = False
+    is_public: bool = True
+    service_role: str = "USER"
+    dj_name: str | None = None
+    dj_id: str | None = None
+    community_nickname: str | None = None
+    play_count: int | None = None
+    notes_radar: NotesRadar | None = None
+    dan: DanByStyle | None = None
+    arena_class: ArenaClassByStyle | None = None
