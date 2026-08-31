@@ -76,8 +76,10 @@ create table public.profiles (
   handle            text unique
                       check (handle is null or handle ~ '^[A-Za-z0-9_]{2,20}$'),
   -- 일반 닉네임. handle과 달리 유일하지 않다(중복 허용) — 화면 표시용, 검색/조회 키는 handle.
-  nickname          text
-                      check (nickname is null or char_length(nickname) between 1 and 20),
+  -- 가입 트리거가 OAuth raw_user_meta_data->>'name'을 그대로 채우므로 길이 제약을
+  -- 걸지 않는다(실명은 20자를 흔히 넘김) — 사용자가 API로 직접 바꾸는 값의 길이
+  -- 제한은 ProfileUpdateRequest(Pydantic) 쪽에서만 강제한다.
+  nickname          text,
   profile_image_url text,
   social_links      jsonb not null default '[]'::jsonb
                       check (jsonb_typeof(social_links) = 'array'),
@@ -99,8 +101,9 @@ returns trigger
 language plpgsql security definer set search_path = ''
 as $$
 begin
+  -- 일부 provider는 이름이 없을 때 null 대신 빈 문자열을 준다 — nullif로 걸러낸다.
   insert into public.profiles (id, nickname)
-  values (new.id, new.raw_user_meta_data ->> 'name');
+  values (new.id, nullif(new.raw_user_meta_data ->> 'name', ''));
   return new;
 end $$;
 
@@ -110,7 +113,7 @@ create trigger on_auth_user_created
   for each row execute function public.handle_new_user();
 
 -- ---------------------------------------------------------------------------
--- public.profiles.display_name → nickname 컬럼명 변경 + 길이 제약 추가
+-- public.profiles.display_name → nickname 컬럼명 변경
 --
 -- baseline이 이미 적용되어 display_name 컬럼으로 테이블이 만들어진 환경에 대한
 -- 증분 마이그레이션(위 create table에는 이미 nickname으로 반영돼 있으므로 새
@@ -124,9 +127,6 @@ begin
     where table_schema = 'public' and table_name = 'profiles' and column_name = 'display_name'
   ) then
     alter table public.profiles rename column display_name to nickname;
-    alter table public.profiles
-      add constraint profiles_nickname_check
-      check (nickname is null or char_length(nickname) between 1 and 20);
   end if;
 end $$;
 
@@ -394,14 +394,25 @@ create policy follows_write_self on public.user_follows
 create policy follows_delete_self on public.user_follows
   for delete using (follower_id = public.current_user_id());
 
-create policy iidx_profiles_read on iidx.profiles
-  for select using (true);
+-- 본인 행만 조회 가능 — anon/authenticated에 service_role 등 서비스 프로필
+-- 전체를 노출하지 않는다(공개 프로필 판단은 백엔드가 iidx_is_public으로 별도
+-- 수행하며, service_role 키로 조회하므로 이 RLS를 우회한다).
+create policy iidx_profiles_read_self on iidx.profiles
+  for select using (user_id = public.current_user_id());
 create policy iidx_profiles_join on iidx.profiles
   for insert with check (
-    user_id = public.current_user_id() and not public.is_banned('iidx'));
+    user_id = public.current_user_id()
+    and not public.is_banned('iidx')
+    and service_role = 'USER');
 create policy iidx_profiles_update_self on iidx.profiles
   for update using (user_id = public.current_user_id())
-  with check (user_id = public.current_user_id() and service_role = 'USER');
+  with check (
+    user_id = public.current_user_id()
+    -- service_role 값 자체는 바꿀 수 없게(승격 차단) 기존 값과 동일할 것만 요구.
+    -- 'USER'로 고정하면 ADMIN 본인이 자기 프로필(is_public 등)을 못 고치게 된다.
+    and service_role = (
+      select p.service_role from iidx.profiles p where p.user_id = public.current_user_id()
+    ));
 
 -- 악곡 마스터와 난이도표는 전체 공개 읽기, 쓰기는 서비스 관리자만
 do $$
@@ -424,19 +435,28 @@ end $$;
 -- ---------------------------------------------------------------------------
 
 grant usage on schema iidx to anon, authenticated;
-grant select on all tables in schema iidx to anon, authenticated;
+
+-- SELECT는 blanket("all tables" 후 필요 없는 것만 revoke)이 아니라 테이블별
+-- 화이트리스트로 부여한다. blanket 방식은 새 테이블을 추가할 때 revoke를
+-- 빠뜨리면 그대로 공개되는 구조적 함정이 있다 — 아래 alter default privileges도
+-- 같은 이유로 기본값을 "새 테이블은 기본 비공개"로 뒤집는다.
+grant select on iidx.songs, iidx.charts, iidx.versions,
+      iidx.difficulty_tables, iidx.difficulty_entries
+  to anon, authenticated;
+-- iidx.profiles는 서비스 프로필(dj_name/dj_id/dan 등)이라 공개 화이트리스트에
+-- 넣지 않는다. select는 authenticated에만 주고, 어느 행이 보이는지는
+-- iidx_profiles_read_self RLS(본인 행만)가 정한다.
+grant select on iidx.profiles to authenticated;
+
 grant insert, update, delete on iidx.profiles to authenticated;
 grant insert, update, delete on iidx.songs, iidx.charts,
       iidx.versions, iidx.difficulty_tables,
       iidx.difficulty_entries to authenticated;
 
+-- 새로 추가되는 iidx 테이블은 기본적으로 anon/authenticated에 아무 권한도 주지
+-- 않는다. 공개해야 하면 위처럼 테이블별로 의식적으로 grant를 추가할 것.
 alter default privileges in schema iidx
-  grant select on tables to anon, authenticated;
-
--- 크롤 운영 테이블은 위 blanket SELECT까지 회수해 service_role 전용으로 확실히 막는다
--- (RLS 정책이 없어 행은 이미 안 보이지만, grant까지 없애 defense-in-depth).
-revoke select on iidx.crawl_targets, iidx.crawl_schedules, iidx.crawl_sync_logs
-  from anon, authenticated;
+  revoke select on tables from anon, authenticated;
 
 -- 트리거 전용 함수: REST API(/rpc/...)를 통한 직접 호출 차단.
 -- 트리거는 role 권한이 아닌 트리거 오너 권한으로 실행되므로 동작에 영향 없음.
@@ -795,11 +815,12 @@ grant all privileges on iidx.score_uploads     to service_role;
 grant all privileges on iidx.score_current     to service_role;
 grant all privileges on iidx.user_chart_scores to service_role;
 
--- authenticated: 읽기(select)는 blanket grant가 이미 앞에 있으나 같은 이유로 미적용.
--- 쓰기는 별도 명시(insert/update/delete).
-grant select, insert, update, delete on iidx.score_uploads     to authenticated;
-grant select, insert, update, delete on iidx.score_current     to authenticated;
-grant select, insert, update, delete on iidx.user_chart_scores to authenticated;
+-- authenticated: 본인 성적 조회는 허용(RLS로 본인 행만 보임). CSV 파싱 파이프라인을
+-- 우회한 성적 위조를 막기 위해 쓰기(insert/update/delete)는 주지 않는다 — 모든
+-- 쓰기는 백엔드가 service_role로만 수행한다.
+grant select on iidx.score_uploads     to authenticated;
+grant select on iidx.score_current     to authenticated;
+grant select on iidx.user_chart_scores to authenticated;
 
 -- 성적 데이터는 비공개 — anon에겐 select 차단 (defense-in-depth, crawl 테이블과 동일 패턴)
 revoke select on iidx.score_uploads, iidx.score_current, iidx.user_chart_scores from anon;
