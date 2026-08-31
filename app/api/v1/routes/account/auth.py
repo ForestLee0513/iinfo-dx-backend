@@ -13,6 +13,8 @@
   FE(JS)는 access token만 메모리에 들고, 갱신은 POST /refresh(본문 없음,
   쿠키 자동 전송)로 처리한다. 별도 오리진 FE는 fetch에 credentials:"include"
   필요(CORS allow_credentials는 main.py에서 이미 켜져 있다).
+- 회원 탈퇴: DELETE /me — auth.users 삭제(Admin API) 한 번으로 profiles 이하
+  전 테이블이 on delete cascade로 정리된다(복구 불가).
 
 쿠키/세션/PKCE/리다이렉트 공통 로직은 auth_common에 있다. 이 라우터는 사용자
 클라이언트(web)용이며 어드민 전용 로그인은 endpoints/admin_auth.py에 있다.
@@ -301,3 +303,25 @@ async def logout(
 def read_current_user(current_user: CurrentUser):
     """현재 로그인한 사용자 정보 조회 (인증 필수)."""
     return current_user
+
+
+@router.delete(
+    "/me",
+    summary="회원 탈퇴 — 계정 영구 삭제",
+    status_code=status.HTTP_204_NO_CONTENT,
+    openapi_extra=PUBLIC,
+)
+async def withdraw(user: CurrentUser, request: Request, response: Response):
+    """현재 로그인한 사용자의 계정을 영구 삭제한다 (복구 불가).
+
+    Supabase Admin API로 auth.users 행을 삭제하면 public.profiles가
+    on delete cascade로 함께 삭제되고, 그 아래 iidx.profiles/follows/
+    user_bans/score_uploads 등도 profiles(id) 참조를 따라 연쇄 삭제된다 —
+    이 엔드포인트는 별도 정리 로직 없이 auth.users 삭제만 호출하면 된다.
+    refresh 쿠키도 함께 지운다.
+    """
+    try:
+        await auth_service.delete_user(user.id)
+    except auth_service.AuthServiceError as e:
+        raise ac.auth_error(e)
+    ac.delete_refresh_cookie(response, request, _CTX)

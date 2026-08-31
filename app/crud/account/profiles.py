@@ -276,6 +276,15 @@ def sync_iidx_stats(
         get_supabase_iidx().table("profiles").upsert(payload, on_conflict="user_id").execute()
 
 
+def delete_iidx_profile(user_id: str) -> None:
+    """iidx.profiles 행을 삭제한다 — IIDX 서비스 탈퇴(온보딩 해제).
+
+    행 존재 여부가 곧 온보딩 여부이므로(is_iidx_member) 이 삭제만으로 서비스
+    탈퇴가 완료된다. 계정 자체(public.profiles/auth.users)는 그대로 남는다.
+    """
+    get_supabase_iidx().table("profiles").delete().eq("user_id", user_id).execute()
+
+
 def upsert_is_public(user_id: str, is_public: bool) -> None:
     """public.profiles의 is_public 값을 업서트."""
     get_supabase().table("profiles").upsert(

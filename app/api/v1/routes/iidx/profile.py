@@ -4,6 +4,9 @@
   비공개면 본인만 조회 가능. iidx.profiles 행이 없으면(미온보딩) 404.
 - PATCH /me — 인증 필수. iidx.profiles.is_public(IIDX 서비스 공개 여부)을
   수정한다. 미온보딩(iidx.profiles 행 없음) 상태면 404.
+- DELETE /me — 인증 필수. IIDX 서비스에서만 탈퇴한다(계정 자체는 유지) —
+  iidx.profiles(온보딩) + 성적 데이터(score_uploads/score_current/
+  user_chart_scores) + 업로드 CSV 파일을 삭제한다. 미온보딩이면 404.
 
 플랫폼 수준 공개 여부(public.profiles.is_public)는 PATCH /profile/me에서 제어.
 IIDX 서비스 수준 공개 여부(iidx.profiles.is_public)는 이 라우터에서 제어.
@@ -11,12 +14,14 @@ IIDX 서비스 수준 공개 여부(iidx.profiles.is_public)는 이 라우터에
 
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUser, OptionalIdentity
 from app.core.openapi import PUBLIC
 from app.crud.account import follows as crud_follows, profiles as crud_profiles
 from app.crud.account.profiles import NotMemberError
+from app.crud.iidx import scores as crud_scores
+from app.services.iidx.scores import storage as score_storage
 from app.schemas.account.profile import (
     HANDLE_PATTERN,
     IidxProfileResponse,
@@ -148,3 +153,30 @@ def update_iidx_profile(body: IidxProfileUpdateRequest, user: CurrentUser):
         following_count=crud_follows.following_count(user.id),
         is_following=None,
     )
+
+
+@router.delete(
+    "/me",
+    summary="IIDX 서비스 탈퇴 — 서비스 데이터 삭제(계정 자체는 유지)",
+    status_code=status.HTTP_204_NO_CONTENT,
+    openapi_extra=PUBLIC,
+)
+def withdraw_iidx_profile(user: CurrentUser):
+    """IIDX 서비스에서만 탈퇴한다 — 계정(auth.users/public.profiles)은 그대로 두고
+    iidx.profiles(온보딩 상태) + 성적 데이터 + 업로드된 CSV 파일을 삭제한다.
+
+    미온보딩(iidx.profiles 행 없음) 상태면 404. score_uploads/score_current/
+    user_chart_scores는 iidx.profiles가 아니라 public.profiles를 참조하므로
+    on delete cascade로 자동 정리되지 않아 여기서 직접 지운다. 순서는
+    (1) storage 경로 조회 → (2) 성적 테이블 삭제 → (3) storage 파일 삭제 →
+    (4) iidx.profiles 삭제(온보딩 해제) — 마지막에 지워야 중간에 실패해도
+    is_iidx_member()가 여전히 True라 재시도가 안전(멱등)하다.
+    """
+    if not crud_profiles.is_iidx_member(user.id):
+        raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
+
+    storage_paths = crud_scores.get_all_storage_paths(user.id)
+    crud_scores.delete_user_scores(user.id)
+    if storage_paths:
+        score_storage.remove_paths(storage_paths)
+    crud_profiles.delete_iidx_profile(user.id)

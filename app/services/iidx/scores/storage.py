@@ -52,6 +52,13 @@ def get_signed_url(path: str, expires_in: int = 3600) -> str:
     return result.get("signedURL") or result.get("signed_url", "")
 
 
+def remove_paths(paths: list[str]) -> None:
+    """지정한 경로들의 CSV 파일을 Storage에서 삭제한다. IIDX 서비스 탈퇴 시 사용."""
+    if not paths:
+        return
+    _storage().from_(SCORE_BUCKET).remove(paths)
+
+
 async def upload_csv_async(path: str, content: bytes) -> str:
     return await asyncio.to_thread(upload_csv, path, content)
 
