@@ -288,3 +288,29 @@ def get_chart_scores_by_upload(upload_id: str, user_id: str) -> list[dict]:
         .execute()
     )
     return result.data or []
+
+
+# ── IIDX 서비스 탈퇴 ──────────────────────────────────────────────────────────
+
+def get_all_storage_paths(user_id: str) -> list[str]:
+    """사용자의 전체 업로드(SP/DP 모두) CSV storage 경로 목록. 서비스 탈퇴 시 파일 정리용."""
+    result = (
+        get_supabase_iidx()
+        .table("score_uploads")
+        .select("storage_path")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return [r["storage_path"] for r in (result.data or [])]
+
+
+def delete_user_scores(user_id: str) -> None:
+    """사용자의 성적 데이터(score_current/score_uploads)를 전부 삭제한다.
+
+    score_current.upload_id → score_uploads(id) FK는 cascade가 없어 score_uploads보다
+    먼저 지워야 한다. user_chart_scores.upload_id → score_uploads(id)는 on delete
+    cascade이므로 score_uploads 삭제만으로 함께 정리된다.
+    """
+    db = get_supabase_iidx()
+    db.table("score_current").delete().eq("user_id", user_id).execute()
+    db.table("score_uploads").delete().eq("user_id", user_id).execute()
