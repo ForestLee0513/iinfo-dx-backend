@@ -106,6 +106,7 @@ class BoardUser(BaseModel):
 
     user_id: str
     handle: str | None = None
+    nickname: str | None = None
     dj_name: str | None = None
 
 

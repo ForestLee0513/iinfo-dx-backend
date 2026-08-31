@@ -75,7 +75,9 @@ create table public.profiles (
   id                uuid primary key references auth.users(id) on delete cascade,
   handle            text unique
                       check (handle is null or handle ~ '^[A-Za-z0-9_]{2,20}$'),
-  display_name      text,
+  -- 일반 닉네임. handle과 달리 유일하지 않다(중복 허용) — 화면 표시용, 검색/조회 키는 handle.
+  nickname          text
+                      check (nickname is null or char_length(nickname) between 1 and 20),
   profile_image_url text,
   social_links      jsonb not null default '[]'::jsonb
                       check (jsonb_typeof(social_links) = 'array'),
@@ -97,7 +99,7 @@ returns trigger
 language plpgsql security definer set search_path = ''
 as $$
 begin
-  insert into public.profiles (id, display_name)
+  insert into public.profiles (id, nickname)
   values (new.id, new.raw_user_meta_data ->> 'name');
   return new;
 end $$;
@@ -106,6 +108,27 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- ---------------------------------------------------------------------------
+-- public.profiles.display_name → nickname 컬럼명 변경 + 길이 제약 추가
+--
+-- baseline이 이미 적용되어 display_name 컬럼으로 테이블이 만들어진 환경에 대한
+-- 증분 마이그레이션(위 create table에는 이미 nickname으로 반영돼 있으므로 새
+-- 환경이라면 이 블록은 그냥 스킵된다). display_name 컬럼이 없으면(=이미 적용됨
+-- 또는 애초에 새 환경) 아무 것도 하지 않아 몇 번을 실행해도 안전하다.
+-- ---------------------------------------------------------------------------
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'display_name'
+  ) then
+    alter table public.profiles rename column display_name to nickname;
+    alter table public.profiles
+      add constraint profiles_nickname_check
+      check (nickname is null or char_length(nickname) between 1 and 20);
+  end if;
+end $$;
 
 
 -- 제재. service가 null이면 플랫폼 전체, 값이 있으면 해당 서비스에만 적용.

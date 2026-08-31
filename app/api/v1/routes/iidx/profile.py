@@ -51,6 +51,7 @@ def _to_response(
     return IidxProfileResponse(
         id=row["user_id"],
         handle=row.get("handle"),
+        nickname=row.get("nickname"),
         role=UserRole(row.get("role", "USER")),
         is_public=bool(row["is_public"]),
         iidx_is_public=bool(row.get("iidx_is_public", True)),

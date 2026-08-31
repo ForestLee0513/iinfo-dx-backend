@@ -40,6 +40,7 @@ class ProfileResponse(BaseModel):
 
     id: str
     handle: str | None = None
+    nickname: str | None = None
     role: UserRole = UserRole.USER
     is_public: bool = True
     social_links: list[SocialLink] = Field(default_factory=list)
@@ -84,6 +85,7 @@ class FollowUserSummary(BaseModel):
 
     id: str
     handle: str | None = None
+    nickname: str | None = None
     profile_image_url: str | None = None
 
 
@@ -99,12 +101,14 @@ class FollowListResponse(BaseModel):
 class ProfileUpdateRequest(BaseModel):
     """PATCH /profile/me 요청 — 명시적으로 보낸 필드만 갱신한다(부분 업데이트).
 
-    handle을 null로 보내면 핸들을 해제(release)한다. social_links는 보낸 목록
-    전체로 치환된다(부분 추가/삭제가 아니라 통째로 교체). is_public은 프로필
-    공개 여부를 전환한다.
+    handle을 null로 보내면 핸들을 해제(release)한다. nickname은 handle과 달리
+    유일하지 않아도 되는 일반 표시용 닉네임이며, null로 보내면 닉네임을 해제한다.
+    social_links는 보낸 목록 전체로 치환된다(부분 추가/삭제가 아니라 통째로 교체).
+    is_public은 프로필 공개 여부를 전환한다.
     """
 
     handle: str | None = None
+    nickname: str | None = None
     social_links: list[SocialLink] | None = None
     is_public: bool | None = None
 
@@ -114,3 +118,10 @@ class ProfileUpdateRequest(BaseModel):
         if v is not None and not HANDLE_PATTERN.match(v):
             raise ValueError("handle은 영문/숫자/밑줄 2~20자여야 합니다.")
         return v
+
+    @field_validator("nickname")
+    @classmethod
+    def _validate_nickname(cls, v: str | None) -> str | None:
+        if v is not None and not (1 <= len(v.strip()) <= 20):
+            raise ValueError("nickname은 1~20자여야 합니다.")
+        return v.strip() if v is not None else v
