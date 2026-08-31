@@ -82,7 +82,10 @@ async def _resolve_board_user(identifier: str, viewer_id: str | None) -> BoardUs
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
     return BoardUser(
-        user_id=user_id, handle=row.get("handle"), dj_name=row.get("dj_name")
+        user_id=user_id,
+        handle=row.get("handle"),
+        nickname=row.get("nickname"),
+        dj_name=row.get("dj_name"),
     )
 
 
@@ -155,6 +158,7 @@ async def get_table_board(
         user = BoardUser(
             user_id=viewer_id,
             handle=(row or {}).get("handle"),
+            nickname=(row or {}).get("nickname"),
             dj_name=(row or {}).get("dj_name"),
         )
     else:

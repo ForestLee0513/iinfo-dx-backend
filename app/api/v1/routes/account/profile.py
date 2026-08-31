@@ -72,6 +72,7 @@ def _to_response(
     return ProfileResponse(
         id=row["user_id"],
         handle=row.get("handle"),
+        nickname=row.get("nickname"),
         role=UserRole(row.get("role", "USER")),
         is_public=bool(row["is_public"]),
         social_links=row.get("social_links") or [],
@@ -125,20 +126,23 @@ def get_profile(identifier: str, identity: OptionalIdentity):
 
 @router.patch(
     "/me",
-    summary="내 프로필 수정 (handle/social_links/is_public)",
+    summary="내 프로필 수정 (handle/nickname/social_links/is_public)",
     response_model=ProfileResponse,
     openapi_extra=PUBLIC,
 )
 def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
-    """본인 프로필 중 handle/social_links/is_public을 수정한다(부분 업데이트).
+    """본인 프로필 중 handle/nickname/social_links/is_public을 수정한다(부분 업데이트).
 
     요청 본문에 없는 필드는 그대로 유지된다. handle을 null로 보내면 핸들을
-    해제하고, 이미 다른 사용자가 쓰는 handle이면 409를 반환한다.
+    해제하고, 이미 다른 사용자가 쓰는 handle이면 409를 반환한다. nickname은
+    다른 사용자와 중복돼도 되므로 409 없이 그대로 저장된다.
     """
     fields = body.model_fields_set
     kwargs = {}
     if "handle" in fields:
         kwargs["handle"] = body.handle
+    if "nickname" in fields:
+        kwargs["nickname"] = body.nickname
     if "social_links" in fields:
         kwargs["social_links"] = (
             [link.model_dump() for link in body.social_links]
@@ -209,6 +213,7 @@ def _to_follow_list(
         FollowUserSummary(
             id=uid,
             handle=summaries.get(uid, {}).get("handle"),
+            nickname=summaries.get(uid, {}).get("nickname"),
             profile_image_url=summaries.get(uid, {}).get("profile_image_url"),
         )
         for uid in ids

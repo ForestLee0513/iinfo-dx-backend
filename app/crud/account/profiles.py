@@ -23,7 +23,7 @@ from app.schemas.account.user import UserRole
 
 # public.profiles에서 프로필 표시에 필요한 컬럼
 _PUBLIC_COLUMNS = (
-    "id, handle, social_links, profile_image_url, is_public, platform_role, updated_at"
+    "id, handle, nickname, social_links, profile_image_url, is_public, platform_role, updated_at"
 )
 # iidx.profiles에서 서비스 전용 필드
 _SVC_COLUMNS = (
@@ -96,6 +96,7 @@ def _merge_row(pub: dict) -> dict:
         "role": role.value,
         "updated_at": pub.get("updated_at"),
         "handle": pub.get("handle"),
+        "nickname": pub.get("nickname"),
         "social_links": pub.get("social_links") or [],
         "dj_name": (svc or {}).get("dj_name"),
         "dj_id": (svc or {}).get("dj_id"),
@@ -162,17 +163,17 @@ def get_profile_row_by_handle(handle: str) -> dict | None:
 
 
 def get_profile_summaries(user_ids: list[str]) -> dict[str, dict]:
-    """팔로워/팔로잉 목록 렌더링용 — user_id로 색인한 {handle, profile_image_url} 맵.
+    """팔로워/팔로잉 목록 렌더링용 — user_id로 색인한 {handle, nickname, profile_image_url} 맵.
 
     N+1 조회를 피하려고 IN절로 한 번에 가져온다. 없는 id는 결과에서 빠진다.
-    표시에 필요한 handle/profile_image_url은 모두 public.profiles에 있다.
+    표시에 필요한 handle/nickname/profile_image_url은 모두 public.profiles에 있다.
     """
     if not user_ids:
         return {}
     result = (
         get_supabase()
         .table("profiles")
-        .select("id, handle, profile_image_url")
+        .select("id, handle, nickname, profile_image_url")
         .in_("id", user_ids)
         .execute()
     )
@@ -183,19 +184,23 @@ def update_editable_fields(
     user_id: str,
     *,
     handle: Any = _UNSET,
+    nickname: Any = _UNSET,
     social_links: Any = _UNSET,
     is_public: Any = _UNSET,
 ) -> dict:
-    """본인이 API로 바꿀 수 있는 필드(handle, social_links, is_public)만 부분 업데이트한다.
+    """본인이 API로 바꿀 수 있는 필드(handle, nickname, social_links, is_public)만 부분 업데이트한다.
 
-    세 필드 모두 public.profiles에 있다. 키워드를 아예 생략하면 해당 필드는
+    네 필드 모두 public.profiles에 있다. 키워드를 아예 생략하면 해당 필드는
     변경하지 않는다. handle=None으로 명시하면 핸들을 해제(release)한다. 프로필
     행은 가입 트리거로 이미 존재하지만, 안전하게 upsert(PK=id)로 처리한다.
     handle 중복(DB unique 제약 위반, code 23505)은 HandleTakenError로 변환한다.
+    nickname은 unique 제약이 없어(중복 허용) 같은 예외가 발생하지 않는다.
     """
     payload: dict = {"id": user_id}
     if handle is not _UNSET:
         payload["handle"] = handle
+    if nickname is not _UNSET:
+        payload["nickname"] = nickname
     if social_links is not _UNSET:
         payload["social_links"] = social_links if social_links is not None else []
     if is_public is not _UNSET:
