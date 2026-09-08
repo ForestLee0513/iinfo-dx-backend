@@ -211,13 +211,28 @@ def _allowed_redirect_origins(ctx: AuthContext) -> set[str]:
 
 def sanitize_redirect_url(redirect_url: str | None, ctx: AuthContext) -> str:
     """FE가 넘긴 redirect URL을 검증한다 — 허용 오리진의 http(s) URL만 통과시키고,
-    미지정·불일치 URL은 에러 대신 홈으로 폴백한다 (open redirect 방지)."""
-    if redirect_url:
-        parts = urlsplit(redirect_url)
+    미지정·불일치·비표준 스킴 URL은 에러 대신 홈으로 폴백한다 (open redirect 방지).
+
+    브라우저(WHATWG URL 파서)는 http/https 같은 "special scheme"에서 백슬래시(\)를
+    슬래시(/)와 동일하게 취급해 "https:\evil.com", "https:/\evil.com" 같은 입력도
+    "https://evil.com"으로 정규화해 이동한다. 반면 RFC 3986 기반인 urlsplit은
+    백슬래시를 일반 문자로 남겨두므로, 서버와 브라우저가 같은 문자열을 서로 다른
+    호스트로 해석할 여지(parser differential)가 생긴다. 지금은 우연히 이런 값이
+    urlsplit에서도 netloc이 비어 화이트리스트에 걸리지 않지만, 파서 구현에 기대지
+    않고 백슬래시가 섞인 값은 애초에 통째로 거부한다.
+
+    urlsplit은 NFKC 정규화 시 '/', '@' 등으로 풀리는 유니코드 동형이의 문자
+    (예: U+2100 "℀" → "a/c")가 netloc에 섞이면 ValueError를 던진다 — 검증 실패가
+    아니라 예외이므로 그대로 두면 이 함수가 500을 내며 죽는다. 그런 입력도 결국
+    허용 목록에 없는 값일 뿐이므로 홈 폴백으로 흡수한다.
+    """
+    if redirect_url and "\\" not in redirect_url:
+        try:
+            parts = urlsplit(redirect_url)
+        except ValueError:
+            return redirect_home(ctx)
         origin = f"{parts.scheme}://{parts.netloc}"
-        if parts.scheme in ("http", "https") and origin in _allowed_redirect_origins(
-            ctx
-        ):
+        if parts.scheme in ("http", "https") and origin in _allowed_redirect_origins(ctx):
             return redirect_url
     return redirect_home(ctx)
 
