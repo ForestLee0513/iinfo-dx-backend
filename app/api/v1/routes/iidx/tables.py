@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import OptionalIdentity
 from app.core.openapi import PUBLIC
-from app.crud.account import profiles as crud_profiles
+from app.crud.account import follows as crud_follows, profiles as crud_profiles
 from app.crud.iidx import scores as crud_scores
 from app.crud.iidx.tables import (
     fetch_entries,
@@ -77,8 +77,9 @@ async def _resolve_board_user(identifier: str, viewer_id: str | None) -> BoardUs
     if not await asyncio.to_thread(crud_profiles.is_iidx_member, user_id):
         raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
 
-    is_mine = viewer_id is not None and viewer_id == user_id
-    if not row.get("iidx_is_public", True) and not is_mine:
+    if not row.get("iidx_is_public", True) and not await asyncio.to_thread(
+        crud_follows.can_view_private_profile, viewer_id, user_id
+    ):
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
     return BoardUser(

@@ -1,7 +1,7 @@
 """IIDX 서비스 프로필 조회/수정 API.
 
 - GET /{identifier} — 인증 불필요(옵셔널). iidx.profiles.is_public 기준으로
-  비공개면 본인만 조회 가능. iidx.profiles 행이 없으면(미온보딩) 404.
+  비공개면 본인 또는 상호 팔로워만 조회 가능. iidx.profiles 행이 없으면(미온보딩) 404.
 - PATCH /me — 인증 필수. iidx.profiles.is_public(IIDX 서비스 공개 여부)을
   수정한다. 미온보딩(iidx.profiles 행 없음) 상태면 404.
 - DELETE /me — 인증 필수. IIDX 서비스에서만 탈퇴한다(계정 자체는 유지) —
@@ -92,7 +92,7 @@ def get_iidx_profile(identifier: str, identity: OptionalIdentity):
     """IIDX 서비스 프로필 조회.
 
     - iidx.profiles 행이 없으면(미온보딩) 404.
-    - iidx_is_public=False인 비공개 프로필은 본인만 조회 가능(404로 은닉).
+    - iidx_is_public=False인 비공개 프로필은 본인 또는 상호 팔로워만 조회 가능(404로 은닉).
     - 플랫폼 공개 여부(is_public)와 별개로, IIDX 서비스 공개 여부(iidx_is_public)로
       가시성을 제어한다.
     """
@@ -105,7 +105,9 @@ def get_iidx_profile(identifier: str, identity: OptionalIdentity):
         raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
 
     is_mine = identity is not None and identity.id == user_id
-    if not row.get("iidx_is_public", True) and not is_mine:
+    if not row.get("iidx_is_public", True) and not crud_follows.can_view_private_profile(
+        identity.id if identity is not None else None, user_id
+    ):
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
     is_following = (

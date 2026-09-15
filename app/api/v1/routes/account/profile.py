@@ -11,7 +11,8 @@
   추후 북마크릿 데이터 갱신 파이프라인이 채운다).
 - POST/DELETE /{identifier}/follow — 인증 필수. 팔로우/언팔로우(둘 다 멱등).
 - GET /{identifier}/followers, /following — 인증 불필요(옵셔널). 대상
-  프로필이 비공개면 본인만 조회 가능 — GET /{identifier}와 동일한 규칙.
+  프로필이 비공개면 본인 또는 상호 팔로우 관계만 조회 가능 — GET /{identifier}와
+  동일한 규칙.
 """
 
 import uuid
@@ -74,13 +75,15 @@ def _resolve_row(identifier: str) -> dict | None:
 def _require_visible_row(
     identifier: str, identity: TokenIdentity | None
 ) -> tuple[dict, bool]:
-    """대상 프로필을 찾아 (row, is_mine)을 반환한다. 없거나 비공개면 404."""
+    """대상 프로필을 찾아 (row, is_mine)을 반환한다. 비공개는 본인/상호 팔로워만 허용한다."""
     row = _resolve_row(identifier)
     if row is None:
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
     user_id = row["user_id"]
     is_mine = identity is not None and identity.id == user_id
-    if not row["is_public"] and not is_mine:
+    if not row["is_public"] and not crud_follows.can_view_private_profile(
+        identity.id if identity is not None else None, user_id
+    ):
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
     return row, is_mine
 
@@ -127,8 +130,8 @@ def get_profile(identifier: str, identity: OptionalIdentity):
     - identifier가 UUID면 user_id로, 아니면 handle로 조회한다(UUID도 handle
       패턴도 아니면 DB 조회 없이 바로 404).
     - 프로필 행이 없으면(가입 트리거 도입 이전 계정 등) 404.
-    - is_public=False인 비공개 프로필은 본인만 조회 가능 — 그 외엔 존재 여부를
-      노출하지 않기 위해 403 대신 404.
+    - is_public=False인 비공개 프로필은 본인 또는 상호 팔로워만 조회 가능 — 그 외엔
+      존재 여부를 노출하지 않기 위해 403 대신 404.
     - 요청에 유효한 Authorization 토큰이 있고 그 sub가 조회된 user_id와 같으면
       is_mine=true와 함께 email/provider를 채운다.
     - is_following은 로그인한 타인이 볼 때만 값이 채워진다(익명/본인 조회는 null).
