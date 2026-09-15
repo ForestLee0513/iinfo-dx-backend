@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CurrentUser, OptionalIdentity, UploadUser
 from app.core.openapi import PUBLIC
-from app.crud.account import profiles as crud_profiles
+from app.crud.account import follows as crud_follows, profiles as crud_profiles
 from app.crud.iidx import charts as crud_charts, scores as crud_scores
 from app.schemas.account.profile import HANDLE_LOOKUP_PATTERN
 from app.schemas.iidx.scores import (
@@ -319,8 +319,11 @@ async def get_score_summary(
     if not await asyncio.to_thread(crud_profiles.is_iidx_member, user_id):
         raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
 
-    is_mine = identity is not None and identity.id == user_id
-    if not row.get("iidx_is_public", True) and not is_mine:
+    if not row.get("iidx_is_public", True) and not await asyncio.to_thread(
+        crud_follows.can_view_private_profile,
+        identity.id if identity is not None else None,
+        user_id,
+    ):
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
     rows = await asyncio.to_thread(crud_scores.get_score_summary_rows, user_id, style)
@@ -391,8 +394,11 @@ async def get_upload_calendar(
     if not await asyncio.to_thread(crud_profiles.is_iidx_member, user_id):
         raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
 
-    is_mine = identity is not None and identity.id == user_id
-    if not row.get("iidx_is_public", True) and not is_mine:
+    if not row.get("iidx_is_public", True) and not await asyncio.to_thread(
+        crud_follows.can_view_private_profile,
+        identity.id if identity is not None else None,
+        user_id,
+    ):
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
     since_utc = datetime.combine(since_date, time.min, tzinfo=zone).astimezone(timezone.utc)
@@ -444,8 +450,11 @@ async def get_score_update_calendar(
     user_id = row["user_id"]
     if not await asyncio.to_thread(crud_profiles.is_iidx_member, user_id):
         raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
-    is_mine = identity is not None and identity.id == user_id
-    if not row.get("iidx_is_public", True) and not is_mine:
+    if not row.get("iidx_is_public", True) and not await asyncio.to_thread(
+        crud_follows.can_view_private_profile,
+        identity.id if identity is not None else None,
+        user_id,
+    ):
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
     since_utc = datetime.combine(since_date, time.min, tzinfo=zone).astimezone(timezone.utc)
@@ -477,8 +486,11 @@ async def get_score_update_history(
     user_id = row["user_id"]
     if not await asyncio.to_thread(crud_profiles.is_iidx_member, user_id):
         raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
-    is_mine = identity is not None and identity.id == user_id
-    if not row.get("iidx_is_public", True) and not is_mine:
+    if not row.get("iidx_is_public", True) and not await asyncio.to_thread(
+        crud_follows.can_view_private_profile,
+        identity.id if identity is not None else None,
+        user_id,
+    ):
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
     rows, total = await asyncio.to_thread(
