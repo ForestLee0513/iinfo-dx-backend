@@ -103,8 +103,9 @@ class FollowListResponse(BaseModel):
 class ProfileUpdateRequest(BaseModel):
     """PATCH /profile/me 요청 — 명시적으로 보낸 필드만 갱신한다(부분 업데이트).
 
-    handle을 null로 보내면 핸들을 해제(release)한다. nickname은 handle과 달리
-    유일하지 않아도 되는 일반 표시용 닉네임이며, null로 보내면 닉네임을 해제한다.
+    handle은 아직 없는 경우에만 최초 설정할 수 있고, 한 번 지정하면 변경하거나
+    해제할 수 없다. nickname은 handle과 달리 유일하지 않아도 되는 일반 표시용
+    닉네임이며, null로 보내면 닉네임을 해제한다.
     social_links는 보낸 목록 전체로 치환된다(부분 추가/삭제가 아니라 통째로 교체).
     is_public은 플랫폼 프로필 공개 여부를 전환한다. service_visibility는
     서비스명별 공개 여부를 한 번에 전환한다. 가입하지 않은 서비스 키는 무시한다.

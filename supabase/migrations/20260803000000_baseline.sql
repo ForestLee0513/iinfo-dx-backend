@@ -91,6 +91,24 @@ create table public.profiles (
   updated_at        timestamptz not null default now()
 );
 
+-- handle은 공개 프로필 검색 키이므로 최초 지정 후에는 변경하거나 해제할 수 없다.
+-- API 외 경로(service_role, SQL 등)로 수정하는 경우에도 같은 규칙을 적용한다.
+create or replace function public.prevent_handle_change()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if old.handle is not null and new.handle is distinct from old.handle then
+    raise exception '이미 지정된 handle은 변경할 수 없습니다.' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+
+create trigger profiles_handle_immutable
+  before update on public.profiles
+  for each row execute function public.prevent_handle_change();
+
 create trigger profiles_touch
   before update on public.profiles
   for each row execute function public.touch_updated_at();

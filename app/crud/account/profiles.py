@@ -58,6 +58,13 @@ class HandleTakenError(Exception):
         super().__init__(f"이미 사용 중인 handle입니다: {handle}")
 
 
+class HandleImmutableError(Exception):
+    """한 번 지정된 handle을 변경하거나 해제하려 한 경우."""
+
+    def __init__(self):
+        super().__init__("이미 지정된 handle은 변경할 수 없습니다.")
+
+
 def _effective_role(platform_role: str | None, service_role: str | None) -> UserRole:
     """두 테이블의 역할을 단일 유효 역할로 합성한다.
 
@@ -193,9 +200,11 @@ def update_editable_fields(
     """본인이 API로 바꿀 수 있는 필드(handle, nickname, social_links, is_public)만 부분 업데이트한다.
 
     네 필드 모두 public.profiles에 있다. 키워드를 아예 생략하면 해당 필드는
-    변경하지 않는다. handle=None으로 명시하면 핸들을 해제(release)한다. 프로필
-    행은 가입 트리거로 이미 존재하지만, 안전하게 upsert(PK=id)로 처리한다.
-    handle 중복(DB unique 제약 위반, code 23505)은 HandleTakenError로 변환한다.
+    변경하지 않는다. handle은 최초 한 번만 지정할 수 있으며, 지정 뒤에는 변경하거나
+    해제할 수 없다. 프로필 행은 가입 트리거로 이미 존재하지만, 안전하게
+    upsert(PK=id)로 처리한다. handle 중복(DB unique 제약 위반, code 23505)은
+    HandleTakenError로, handle 변경 방지 트리거(code P0001)는
+    HandleImmutableError로 변환한다.
     nickname은 unique 제약이 없어(중복 허용) 같은 예외가 발생하지 않는다.
     """
     payload: dict = {"id": user_id}
@@ -214,6 +223,8 @@ def update_editable_fields(
         except APIError as e:
             if getattr(e, "code", None) == "23505":
                 raise HandleTakenError(handle if handle is not _UNSET else None) from e
+            if getattr(e, "code", None) == "P0001":
+                raise HandleImmutableError() from e
             raise
 
     return get_profile_row(user_id) or {}
