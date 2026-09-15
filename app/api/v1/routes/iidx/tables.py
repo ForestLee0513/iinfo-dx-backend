@@ -25,7 +25,7 @@ from app.crud.iidx.tables import (
     fetch_tables,
     sort_entries_by_rank,
 )
-from app.schemas.account.profile import HANDLE_PATTERN
+from app.schemas.account.profile import HANDLE_LOOKUP_PATTERN
 from app.schemas.iidx.table import (
     BoardUser,
     TableBoardResponse,
@@ -57,7 +57,7 @@ def _resolve_identifier(identifier: str) -> dict | None:
     try:
         uuid.UUID(identifier)
     except ValueError:
-        if not HANDLE_PATTERN.match(identifier):
+        if not HANDLE_LOOKUP_PATTERN.match(identifier):
             return None
         return crud_profiles.get_profile_row_by_handle(identifier)
     return crud_profiles.get_profile_row(identifier)

@@ -23,7 +23,7 @@ from app.api.deps import CurrentUser, OptionalIdentity, UploadUser
 from app.core.openapi import PUBLIC
 from app.crud.account import profiles as crud_profiles
 from app.crud.iidx import charts as crud_charts, scores as crud_scores
-from app.schemas.account.profile import HANDLE_PATTERN
+from app.schemas.account.profile import HANDLE_LOOKUP_PATTERN
 from app.schemas.iidx.scores import (
     ChartScoreItem,
     DownloadUrlResponse,
@@ -278,7 +278,7 @@ def _resolve_identifier(identifier: str) -> dict | None:
     try:
         uuid.UUID(identifier)
     except ValueError:
-        if not HANDLE_PATTERN.match(identifier):
+        if not HANDLE_LOOKUP_PATTERN.match(identifier):
             return None
         return crud_profiles.get_profile_row_by_handle(identifier)
     return crud_profiles.get_profile_row(identifier)

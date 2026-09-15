@@ -12,8 +12,12 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.account.user import UserRole
 
-# DB의 user_profiles_handle_format_chk 제약과 동일한 규칙(영문/숫자/밑줄 2~20자)
-HANDLE_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,20}$")
+# DB의 profiles_handle_format_chk 제약과 동일한 규칙.
+# 소문자 영문/숫자/밑줄/마침표만 허용하며, 마침표는 연속으로 쓸 수 없다.
+HANDLE_PATTERN = re.compile(r"\A(?!.*\.\.)[a-z0-9_.]{2,20}\Z")
+# 조회는 기존 handle 및 사용자 입력을 위해 대소문자를 구분하지 않는다. 저장 시에는
+# HANDLE_PATTERN만 사용해 소문자 규칙을 계속 강제한다.
+HANDLE_LOOKUP_PATTERN = re.compile(r"\A(?!.*\.\.)[A-Za-z0-9_.]{2,20}\Z")
 
 
 class SocialLink(BaseModel):
@@ -126,7 +130,10 @@ class ProfileUpdateRequest(BaseModel):
     @classmethod
     def _validate_handle(cls, v: str | None) -> str | None:
         if v is not None and not HANDLE_PATTERN.match(v):
-            raise ValueError("handle은 영문/숫자/밑줄 2~20자여야 합니다.")
+            raise ValueError(
+                "handle은 소문자 영문/숫자/밑줄/마침표만 사용한 2~20자여야 하며, "
+                "연속 마침표는 사용할 수 없습니다."
+            )
         return v
 
     @field_validator("nickname")

@@ -23,7 +23,7 @@ from app.core.openapi import PUBLIC
 from app.crud.account import follows as crud_follows, profiles as crud_profiles
 from app.crud.account.profiles import HandleImmutableError, HandleTakenError
 from app.schemas.account.profile import (
-    HANDLE_PATTERN,
+    HANDLE_LOOKUP_PATTERN,
     FollowListResponse,
     FollowUserSummary,
     ProfileResponse,
@@ -65,7 +65,7 @@ def _resolve_row(identifier: str) -> dict | None:
     try:
         uuid.UUID(identifier)
     except ValueError:
-        if not HANDLE_PATTERN.match(identifier):
+        if not HANDLE_LOOKUP_PATTERN.match(identifier):
             return None
         return crud_profiles.get_profile_row_by_handle(identifier)
     return crud_profiles.get_profile_row(identifier)
