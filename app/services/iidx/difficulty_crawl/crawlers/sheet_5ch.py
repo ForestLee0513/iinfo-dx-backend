@@ -5,6 +5,7 @@ import httpx
 from app.core.config import settings
 from app.services.iidx.difficulty_crawl.crawlers.base import DEFAULT_HEADERS, TableDef, TableResult, register
 from app.services.iidx.difficulty_crawl.parsers.sheet_parser import parse_sheet
+from app.services.iidx.difficulty_crawl.url_policy import validate_target_url
 
 
 @register("5ch_sheet")
@@ -26,12 +27,15 @@ class Sheet5chCrawler:
 
     async def crawl(self, client: httpx.AsyncClient, target: dict) -> list[TableResult]:
         style, level = target["play_style"], target["level"]
+        url = validate_target_url("5ch_sheet", target.get("url"))
 
         resp = await client.get(
-            target["url"],
+            url,
             headers=DEFAULT_HEADERS,
             timeout=settings.REQUEST_TIMEOUT,
-            follow_redirects=True,
+            # A redirect can escape the hostname allow-list, so reject it
+            # rather than following it to a potentially internal address.
+            follow_redirects=False,
         )
         resp.raise_for_status()
         # {grade: [ {title, series, difficulty, level, grade, table_type}, ... ]}
