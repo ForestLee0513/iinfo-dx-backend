@@ -74,7 +74,12 @@ end $$;
 create table public.profiles (
   id                uuid primary key references auth.users(id) on delete cascade,
   handle            text unique
-                      check (handle is null or handle ~ '^[A-Za-z0-9_]{2,20}$'),
+                      constraint profiles_handle_format_chk check (
+                        handle is null or (
+                          handle ~ '^[a-z0-9_.]{2,20}$'
+                          and handle !~ '\.\.'
+                        )
+                      ),
   -- 일반 닉네임. handle과 달리 유일하지 않다(중복 허용) — 화면 표시용, 검색/조회 키는 handle.
   -- 가입 트리거가 OAuth raw_user_meta_data->>'name'을 그대로 채우므로 길이 제약을
   -- 걸지 않는다(실명은 20자를 흔히 넘김) — 사용자가 API로 직접 바꾸는 값의 길이

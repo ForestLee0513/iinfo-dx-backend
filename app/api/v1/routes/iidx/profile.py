@@ -24,7 +24,7 @@ from app.crud.account.profiles import NotMemberError
 from app.crud.iidx import scores as crud_scores
 from app.services.iidx.scores import storage as score_storage
 from app.schemas.account.profile import (
-    HANDLE_PATTERN,
+    HANDLE_LOOKUP_PATTERN,
     IidxProfileResponse,
     IidxProfileUpdateRequest,
 )
@@ -38,7 +38,7 @@ def _resolve_row(identifier: str) -> dict | None:
     try:
         uuid.UUID(identifier)
     except ValueError:
-        if not HANDLE_PATTERN.match(identifier):
+        if not HANDLE_LOOKUP_PATTERN.match(identifier):
             return None
         return crud_profiles.get_profile_row_by_handle(identifier)
     return crud_profiles.get_profile_row(identifier)
