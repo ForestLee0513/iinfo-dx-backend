@@ -34,6 +34,32 @@ from app.schemas.account.user import UserRole
 router = APIRouter()
 
 
+def _merge_social_links(existing: list[dict], updates: list) -> list[dict]:
+    """URL이 비어 있는 플랫폼은 기존 링크를 유지하며 소셜 링크 목록을 갱신한다.
+
+    목록에 아예 없는 플랫폼은 기존 PATCH 규약대로 제거한다. URL이 비어 있는데
+    기존 링크도 없으면 새 빈 링크를 만들지 않는다.
+    """
+    existing_by_platform = {
+        str(link.get("platform", "")).strip().casefold(): link
+        for link in existing
+        if isinstance(link, dict) and str(link.get("platform", "")).strip()
+    }
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for link in updates:
+        platform = link.platform.strip()
+        key = platform.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if link.url:
+            merged.append({"platform": platform, "url": link.url})
+        elif key in existing_by_platform:
+            merged.append(existing_by_platform[key])
+    return merged
+
+
 def _resolve_row(identifier: str) -> dict | None:
     """identifier(UUID 또는 handle)로 user_profiles 행을 찾는다. 없으면 None."""
     try:
@@ -146,7 +172,10 @@ def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
         kwargs["nickname"] = body.nickname
     if "social_links" in fields:
         kwargs["social_links"] = (
-            [link.model_dump() for link in body.social_links]
+            _merge_social_links(
+                (crud_profiles.get_profile_row(user.id) or {}).get("social_links") or [],
+                body.social_links,
+            )
             if body.social_links is not None
             else []
         )
