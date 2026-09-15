@@ -9,7 +9,8 @@
   user_chart_scores) + 업로드 CSV 파일을 삭제한다. 미온보딩이면 404.
 
 플랫폼 수준 공개 여부(public.profiles.is_public)는 PATCH /profile/me에서 제어.
-IIDX 서비스 수준 공개 여부(iidx.profiles.is_public)는 이 라우터에서 제어.
+IIDX 서비스 수준 공개 여부(iidx.profiles.is_public)는 이 라우터 또는
+PATCH /profile/me의 service_visibility에서 제어.
 """
 
 import uuid
@@ -77,6 +78,7 @@ def _to_response(
         following_count=following_count,
         is_following=is_following,
         joined_services=row.get("joined_services") or [],
+        service_visibility=row.get("service_visibility") or {},
     )
 
 
