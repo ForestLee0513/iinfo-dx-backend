@@ -467,9 +467,13 @@ grant select on iidx.songs, iidx.charts, iidx.versions,
 grant select on iidx.profiles to authenticated;
 
 grant insert, update, delete on iidx.profiles to authenticated;
-grant insert, update, delete on iidx.songs, iidx.charts,
-      iidx.versions, iidx.difficulty_tables,
-      iidx.difficulty_entries to authenticated;
+-- Catalog writes are only performed by this backend's service_role client.
+-- Keeping browser roles read-only removes an otherwise unnecessary API path.
+revoke insert, update, delete on iidx.songs, iidx.charts,
+       iidx.versions, iidx.difficulty_tables, iidx.difficulty_entries
+  from anon, authenticated;
+revoke all on iidx.crawl_targets, iidx.crawl_schedules, iidx.crawl_sync_logs
+  from anon, authenticated;
 
 -- 새로 추가되는 iidx 테이블은 기본적으로 anon/authenticated에 아무 권한도 주지
 -- 않는다. 공개해야 하면 위처럼 테이블별로 의식적으로 grant를 추가할 것.
@@ -507,12 +511,25 @@ create or replace function iidx.sync_song_master(p_payload jsonb)
 returns jsonb
 language plpgsql
 security definer
-set search_path = iidx, public
+set search_path = iidx, public, pg_temp
 as $$
 declare
   v_songs_total  int;
   v_charts_total int;
 begin
+  -- This snapshot deactivates rows absent from the payload. Reject an empty or
+  -- malformed crawler result before it can turn the whole catalog inactive.
+  if jsonb_typeof(p_payload) <> 'object'
+     or jsonb_typeof(p_payload->'versions') <> 'array'
+     or jsonb_typeof(p_payload->'songs') <> 'array'
+     or jsonb_array_length(p_payload->'songs') = 0 then
+    raise exception 'sync_song_master requires non-empty versions and songs arrays'
+      using errcode = '22023';
+  end if;
+
+  -- Serialise full snapshots across scheduler workers and deployments.
+  perform pg_advisory_xact_lock(hashtextextended('iidx.sync_song_master', 0));
+
   -- 1) 버전 upsert
   insert into versions (id, name)
   select (v->>'id')::smallint, v->>'name'
@@ -595,13 +612,23 @@ create or replace function iidx.sync_table_result(
 returns jsonb
 language plpgsql
 security definer
-set search_path = iidx, public
+set search_path = iidx, public, pg_temp
 as $$
 declare
   v_slug     text := p_table->>'slug';
   v_table_id uuid;
   v_count    int;
 begin
+  if jsonb_typeof(p_table) <> 'object' or nullif(v_slug, '') is null
+     or jsonb_typeof(coalesce(p_entries, '[]'::jsonb)) <> 'array' then
+    raise exception 'sync_table_result requires a table slug and an entries array'
+      using errcode = '22023';
+  end if;
+
+  -- Entries are replaced atomically; serialize only competing snapshots of
+  -- the same table so independent tables still sync concurrently.
+  perform pg_advisory_xact_lock(hashtextextended('iidx.sync_table_result:' || v_slug, 0));
+
   -- 1) 표 upsert (slug 기준), id 확보
   insert into difficulty_tables
     (slug, name, source, play_style, rating_type, level, grades, updated_at)
@@ -820,15 +847,15 @@ alter table iidx.user_chart_scores    enable row level security;
 
 -- authenticated 사용자는 본인 데이터만 읽기/쓰기
 create policy score_uploads_self on iidx.score_uploads
-  for all using (user_id = public.current_user_id())
+  for all to authenticated using (user_id = public.current_user_id())
   with check (user_id = public.current_user_id());
 
 create policy score_current_self on iidx.score_current
-  for all using (user_id = public.current_user_id())
+  for all to authenticated using (user_id = public.current_user_id())
   with check (user_id = public.current_user_id());
 
 create policy user_chart_scores_self on iidx.user_chart_scores
-  for all using (user_id = public.current_user_id())
+  for all to authenticated using (user_id = public.current_user_id())
   with check (user_id = public.current_user_id());
 
 -- score 테이블은 "grant all on all tables in schema iidx"(line 앞쪽) 이후에 생성되므로
