@@ -8,6 +8,8 @@
   GET    /iidx/scores/snapshots/{upload_id}/download — 원본 CSV 다운로드 URL
   GET    /iidx/scores/summary?identifier=&style=&level= — 클리어 현황 요약
   GET    /iidx/scores/upload-calendar?identifier=&style=&since=&until=&days=&tz= — 날짜별 업로드 횟수(기여도 그래프)
+  GET    /iidx/scores/update-calendar?identifier=&style=&since=&until=&days=&tz= — 날짜별 성적 갱신 채보 수
+  GET    /iidx/scores/update-history?identifier=&style=&page=&per_page= — 최신순 성적 추가·갱신 이력
 """
 
 import asyncio
@@ -29,6 +31,9 @@ from app.schemas.iidx.scores import (
     RestoreResponse,
     ScoreListResponse,
     ScoreSummaryResponse,
+    ScoreUpdateCalendarResponse,
+    ScoreUpdateHistoryItem,
+    ScoreUpdateHistoryResponse,
     ScoreUploadRequest,
     SnapshotListResponse,
     SnapshotSummary,
@@ -38,7 +43,7 @@ from app.schemas.iidx.scores import (
 )
 from app.services.iidx.scores import storage as score_storage, upload_token as _upload_token
 from app.services.iidx.scores.summary import build_score_summary
-from app.services.iidx.scores.upload_calendar import build_upload_calendar
+from app.services.iidx.scores.upload_calendar import build_score_update_calendar, build_upload_calendar
 from app.services.iidx.scores.upload import upload_score_csv
 
 router = APIRouter()
@@ -395,4 +400,106 @@ async def get_upload_calendar(
     rows = await asyncio.to_thread(crud_scores.get_upload_dates, user_id, style, since_utc)
     return build_upload_calendar(
         rows, style=style, tz=tz, since=since_date, until=until_date
+    )
+
+
+@router.get(
+    "/update-calendar",
+    summary="날짜별 성적 추가·갱신 채보 수 (기여도 그래프)",
+    response_model=ScoreUpdateCalendarResponse,
+    openapi_extra=PUBLIC,
+)
+async def get_score_update_calendar(
+    identity: OptionalIdentity,
+    identifier: str = Query(..., description="대상 유저의 UUID 또는 handle"),
+    style: str | None = Query(None, description="SP 또는 DP. 생략하면 SP+DP 합산"),
+    since: date | None = Query(None, description="조회 시작 날짜(YYYY-MM-DD, tz 기준)."),
+    until: date | None = Query(None, description="조회 종료 날짜(YYYY-MM-DD, tz 기준)."),
+    days: int = Query(365, ge=1, le=366, description="since 생략 시 집계할 일수"),
+    tz: str = Query("UTC", description="집계 기준 IANA 타임존"),
+):
+    """날짜별로 직전 스냅샷 대비 신규·갱신 성적 채보 수를 분리해 반환한다.
+
+    각 날짜의 ``total``은 ``added + updated``로, 기여도 셀의 색상 강도에
+    바로 사용할 수 있다. 최초 업로드와 동일 CSV 재업로드의 처리, 공개 여부,
+    기간/타임존 규칙은 ``/upload-calendar``과 동일하다.
+    """
+    if style is not None:
+        _check_style(style)
+    try:
+        zone = ZoneInfo(tz)
+    except ZoneInfoNotFoundError:
+        raise HTTPException(status_code=422, detail="유효하지 않은 타임존입니다.")
+
+    until_date = until if until is not None else datetime.now(tz=zone).date()
+    since_date = since if since is not None else until_date - timedelta(days=days - 1)
+    if since_date > until_date:
+        raise HTTPException(status_code=422, detail="since는 until보다 이전이거나 같아야 합니다.")
+    if (until_date - since_date).days + 1 > 3660:
+        raise HTTPException(status_code=422, detail="조회 기간이 너무 깁니다 (최대 3660일).")
+
+    row = _resolve_identifier(identifier)
+    if row is None:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+    user_id = row["user_id"]
+    if not await asyncio.to_thread(crud_profiles.is_iidx_member, user_id):
+        raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
+    is_mine = identity is not None and identity.id == user_id
+    if not row.get("iidx_is_public", True) and not is_mine:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+
+    since_utc = datetime.combine(since_date, time.min, tzinfo=zone).astimezone(timezone.utc)
+    rows = await asyncio.to_thread(crud_scores.get_score_update_dates, user_id, style, since_utc)
+    return build_score_update_calendar(
+        rows, style=style, tz=tz, since=since_date, until=until_date
+    )
+
+
+@router.get(
+    "/update-history",
+    summary="성적 추가·갱신 이력 (최신순 페이지네이션)",
+    response_model=ScoreUpdateHistoryResponse,
+    openapi_extra=PUBLIC,
+)
+async def get_score_update_history(
+    identity: OptionalIdentity,
+    identifier: str = Query(..., description="대상 유저의 UUID 또는 handle"),
+    style: str | None = Query(None, description="SP 또는 DP. 생략하면 SP+DP"),
+    page: int = Query(1, ge=1, description="페이지 번호 (최신 페이지부터 1)"),
+    per_page: int = Query(20, ge=1, le=100, description="페이지당 이력 수"),
+):
+    """성적 변경 이력을 최신에서 과거순으로 페이지네이션해 반환한다."""
+    if style is not None:
+        _check_style(style)
+    row = _resolve_identifier(identifier)
+    if row is None:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+    user_id = row["user_id"]
+    if not await asyncio.to_thread(crud_profiles.is_iidx_member, user_id):
+        raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
+    is_mine = identity is not None and identity.id == user_id
+    if not row.get("iidx_is_public", True) and not is_mine:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+
+    rows, total = await asyncio.to_thread(
+        crud_scores.list_score_update_history, user_id, style, page, per_page
+    )
+    return ScoreUpdateHistoryResponse(
+        page=page,
+        per_page=per_page,
+        total=total,
+        total_pages=(total + per_page - 1) // per_page,
+        items=[
+            ScoreUpdateHistoryItem(
+                upload_id=item["id"],
+                play_style=item["play_style"],
+                source=item["source"],
+                uploaded_at=item["uploaded_at"],
+                added=int(item.get("added_chart_count") or 0),
+                updated=int(item.get("updated_chart_count") or 0),
+                total=int(item.get("added_chart_count") or 0)
+                + int(item.get("updated_chart_count") or 0),
+            )
+            for item in rows
+        ],
     )

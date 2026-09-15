@@ -10,7 +10,7 @@ gap-filling 없이 캘린더를 그릴 수 있게 한다.
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.schemas.iidx.scores import UploadCalendarResponse
+from app.schemas.iidx.scores import ScoreChangeCounts, ScoreUpdateCalendarResponse, UploadCalendarResponse
 
 
 def build_upload_calendar(
@@ -42,5 +42,45 @@ def build_upload_calendar(
         since=since,
         until=until,
         total=sum(counts.values()),
+        days=days,
+    )
+
+
+def build_score_update_calendar(
+    rows: list[dict],
+    *,
+    style: str | None,
+    tz: str,
+    since: date,
+    until: date,
+) -> ScoreUpdateCalendarResponse:
+    """(uploaded_at, added/updated_chart_count) 행을 날짜별 성적 변경 수로 합산한다."""
+    zone = ZoneInfo(tz)
+    counts: dict[date, ScoreChangeCounts] = {}
+    for row in rows:
+        d = datetime.fromisoformat(row["uploaded_at"]).astimezone(zone).date()
+        if since <= d <= until:
+            existing = counts.get(d, ScoreChangeCounts())
+            added = existing.added + int(row.get("added_chart_count") or 0)
+            updated = existing.updated + int(row.get("updated_chart_count") or 0)
+            counts[d] = ScoreChangeCounts(added=added, updated=updated, total=added + updated)
+
+    days: dict[date, ScoreChangeCounts] = {}
+    cur = since
+    while cur <= until:
+        days[cur] = counts.get(cur, ScoreChangeCounts())
+        cur += timedelta(days=1)
+
+    added_total = sum(count.added for count in counts.values())
+    updated_total = sum(count.updated for count in counts.values())
+
+    return ScoreUpdateCalendarResponse(
+        style=style,
+        tz=tz,
+        since=since,
+        until=until,
+        total=added_total + updated_total,
+        added_total=added_total,
+        updated_total=updated_total,
         days=days,
     )

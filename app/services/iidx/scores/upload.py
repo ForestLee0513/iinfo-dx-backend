@@ -17,6 +17,7 @@ from app.crud.iidx import scores as crud_scores
 from app.services.iidx.scores import storage as score_storage
 from app.services.iidx.scores.matcher import enrich_async
 from app.services.iidx.scores.parser import ParseResult, parse_csv
+from app.services.iidx.scores.updates import classify_chart_score_changes
 
 
 @dataclass
@@ -24,6 +25,8 @@ class UploadResult:
     upload_id: str
     source: str       # "official" | "crawled"
     song_count: int
+    added_chart_count: int
+    updated_chart_count: int
     uploaded_at: str | None
     changed: bool     # False = 동일 내용, 스냅샷 미생성
 
@@ -49,6 +52,8 @@ async def upload_score_csv(
             upload_id=existing["id"],
             source=existing["source"],
             song_count=existing["song_count"],
+            added_chart_count=existing.get("added_chart_count", 0),
+            updated_chart_count=existing.get("updated_chart_count", 0),
             uploaded_at=existing.get("uploaded_at"),
             changed=False,
         )
@@ -65,16 +70,9 @@ async def upload_score_csv(
     # 곡 수 = 중복 없는 타이틀 수
     song_count = len({s.title for s in parsed.scores})
 
-    # DB 레코드 생성
-    upload_row = await asyncio.to_thread(
-        crud_scores.insert_upload,
-        upload_id=upload_id,
-        user_id=user_id,
-        play_style=play_style,
-        source=parsed.source,
-        content_hash=content_hash,
-        storage_path=storage_path,
-        song_count=song_count,
+    # 이전 활성 스냅샷과 비교한다. 최초 업로드의 모든 채보는 신규 기록이다.
+    previous_scores = await asyncio.to_thread(
+        crud_scores.get_current_score_values, user_id, play_style
     )
 
     # songs/charts 마스터 매칭 — song_id 획득 + 크롤 CSV 누락 필드 보완
@@ -105,6 +103,21 @@ async def upload_score_csv(
         }
         for e in enriched
     ]
+    changes = classify_chart_score_changes(previous_scores, score_rows)
+
+    # DB 레코드 생성
+    upload_row = await asyncio.to_thread(
+        crud_scores.insert_upload,
+        upload_id=upload_id,
+        user_id=user_id,
+        play_style=play_style,
+        source=parsed.source,
+        content_hash=content_hash,
+        storage_path=storage_path,
+        song_count=song_count,
+        added_chart_count=changes.added,
+        updated_chart_count=changes.updated,
+    )
     await asyncio.to_thread(
         crud_scores.insert_chart_scores, upload_id, user_id, play_style, score_rows
     )
@@ -116,6 +129,8 @@ async def upload_score_csv(
         upload_id=upload_id,
         source=parsed.source,
         song_count=song_count,
+        added_chart_count=changes.added,
+        updated_chart_count=changes.updated,
         uploaded_at=upload_row.get("uploaded_at"),
         changed=True,
     )

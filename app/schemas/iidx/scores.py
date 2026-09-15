@@ -34,6 +34,8 @@ class UploadResponse(BaseModel):
     play_style: str
     source: str          # "official" | "crawled"
     song_count: int
+    added_chart_count: int  # 직전 스냅샷에 없던 신규 채보 수(최초 업로드는 전체 채보)
+    updated_chart_count: int  # 직전 스냅샷과 달라진 채보 수
     uploaded_at: datetime | None = None
     changed: bool        # False = 동일 내용, 스냅샷 미생성
 
@@ -168,3 +170,43 @@ class UploadCalendarResponse(BaseModel):
     until: date  # 조회 종료 날짜 (tz 기준 년/월/일)
     total: int
     days: dict[date, int]  # "YYYY-MM-DD" -> 업로드 횟수. since~until 전체 날짜 포함(없으면 0)
+
+
+class ScoreChangeCounts(BaseModel):
+    """하루 또는 한 번의 성적 동기화에서 발생한 추가·갱신 채보 수."""
+
+    added: int = 0
+    updated: int = 0
+    total: int = 0  # added + updated. 기여도 셀 색상 강도에 사용
+
+
+class ScoreUpdateCalendarResponse(BaseModel):
+    """GET /iidx/scores/update-calendar 응답 — 날짜별 성적 추가·갱신 기여도."""
+
+    style: str | None = None
+    tz: str
+    since: date
+    until: date
+    total: int  # 기간 전체 added + updated
+    added_total: int = 0
+    updated_total: int = 0
+    days: dict[date, ScoreChangeCounts]  # 빈 날짜도 {added:0, updated:0, total:0}
+
+
+class ScoreUpdateHistoryItem(ScoreChangeCounts):
+    """최신순 성적 추가·갱신 이력 한 건."""
+
+    upload_id: str
+    play_style: str
+    source: str
+    uploaded_at: datetime
+
+
+class ScoreUpdateHistoryResponse(BaseModel):
+    """GET /iidx/scores/update-history 응답."""
+
+    page: int
+    per_page: int
+    total: int  # 전체 이력 건수
+    total_pages: int
+    items: list[ScoreUpdateHistoryItem]
