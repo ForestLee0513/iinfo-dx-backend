@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.api.deps import CurrentUser, OptionalIdentity, TokenIdentity
 from app.core.openapi import PUBLIC
 from app.crud.account import follows as crud_follows, profiles as crud_profiles
-from app.crud.account.profiles import HandleTakenError
+from app.crud.account.profiles import HandleImmutableError, HandleTakenError
 from app.schemas.account.profile import (
     HANDLE_PATTERN,
     FollowListResponse,
@@ -134,8 +134,8 @@ def get_profile(identifier: str, identity: OptionalIdentity):
 def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
     """본인 프로필과 가입한 서비스의 공개 여부를 부분 수정한다.
 
-    요청 본문에 없는 필드는 그대로 유지된다. handle을 null로 보내면 핸들을
-    해제하고, 이미 다른 사용자가 쓰는 handle이면 409를 반환한다. nickname은
+    요청 본문에 없는 필드는 그대로 유지된다. handle은 아직 지정하지 않은 경우에만
+    최초 설정할 수 있으며, 지정 후 변경 또는 해제 요청은 409를 반환한다. nickname은
     다른 사용자와 중복돼도 되므로 409 없이 그대로 저장된다.
     """
     fields = body.model_fields_set
@@ -158,6 +158,10 @@ def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
             row = crud_profiles.update_editable_fields(user.id, **kwargs)
         except HandleTakenError:
             raise HTTPException(status_code=409, detail="이미 사용 중인 handle입니다.")
+        except HandleImmutableError:
+            raise HTTPException(
+                status_code=409, detail="이미 지정된 handle은 변경할 수 없습니다."
+            )
     else:
         row = crud_profiles.get_profile_row(user.id) or {
             "user_id": user.id,
