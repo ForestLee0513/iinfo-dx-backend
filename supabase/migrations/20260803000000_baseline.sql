@@ -752,6 +752,10 @@ create table iidx.score_uploads (
   content_hash  text not null,   -- SHA-256 hex (동일 내용 재업로드 감지)
   storage_path  text not null,   -- Supabase Storage 버킷 내 상대 경로
   song_count    integer not null default 0,
+  -- 직전 스냅샷에는 없던 신규 채보 수. 최초 업로드는 전체 채보를 신규로 센다.
+  added_chart_count integer not null default 0 check (added_chart_count >= 0),
+  -- 직전 스냅샷과 비교해 실제 성적이 바뀐 채보 수. 최초 업로드는 0이다.
+  updated_chart_count integer not null default 0 check (updated_chart_count >= 0),
   uploaded_at   timestamptz not null default now(),
   -- 동일 사용자·스타일·내용 중복 업로드 방지 (→ 스냅샷 미생성)
   unique (user_id, play_style, content_hash)

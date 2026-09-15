@@ -20,6 +20,8 @@ def insert_upload(
     content_hash: str,
     storage_path: str,
     song_count: int,
+    added_chart_count: int,
+    updated_chart_count: int,
 ) -> dict:
     """업로드 메타 행을 삽입하고 삽입된 행을 반환한다."""
     result = (
@@ -33,6 +35,8 @@ def insert_upload(
             "content_hash": content_hash,
             "storage_path": storage_path,
             "song_count": song_count,
+            "added_chart_count": added_chart_count,
+            "updated_chart_count": updated_chart_count,
         })
         .execute()
     )
@@ -184,6 +188,42 @@ def get_score_summary_rows(user_id: str, play_style: str) -> list[dict]:
     return rows
 
 
+_SCORE_VALUE_COLUMNS = (
+    "title, difficulty, ex_score, pgreat, great, clear_type, dj_level, "
+    "play_count, miss_count, last_played_at"
+)
+
+
+def get_current_score_values(user_id: str, play_style: str) -> list[dict]:
+    """직전 활성 스냅샷의 갱신 비교용 성적 필드를 전량 반환한다.
+
+    PostgREST 기본 응답 한도를 넘는 스냅샷도 있으므로 반드시 페이지네이션한다.
+    """
+    current = get_current(user_id, play_style)
+    if not current:
+        return []
+
+    rows: list[dict] = []
+    start = 0
+    db = get_supabase_iidx()
+    while True:
+        page = (
+            db.table("user_chart_scores")
+            .select(_SCORE_VALUE_COLUMNS)
+            .eq("upload_id", current["upload_id"])
+            .eq("user_id", user_id)
+            .range(start, start + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(page)
+        if len(page) < _PAGE:
+            break
+        start += _PAGE
+    return rows
+
+
 def _fetch_board_rows(db, upload_id: str, user_id: str) -> list[dict]:
     """서열표 매칭용 최소 컬럼을 한 업로드에서 페이지네이션으로 전량 로드한다."""
     rows: list[dict] = []
@@ -275,6 +315,48 @@ def get_upload_dates(
         query = query.gte("uploaded_at", since.isoformat())
     result = query.execute()
     return result.data or []
+
+
+def get_score_update_dates(
+    user_id: str, play_style: str | None = None, since: datetime | None = None
+) -> list[dict]:
+    """성적 추가·갱신 수와 해당 업로드 시각을 반환한다 — 기여도 그래프용."""
+    query = (
+        get_supabase_iidx()
+        .table("score_uploads")
+        .select("uploaded_at, added_chart_count, updated_chart_count")
+        .eq("user_id", user_id)
+    )
+    if play_style is not None:
+        query = query.eq("play_style", play_style)
+    if since is not None:
+        query = query.gte("uploaded_at", since.isoformat())
+    result = query.execute()
+    return result.data or []
+
+
+def list_score_update_history(
+    user_id: str, play_style: str | None, page: int, per_page: int
+) -> tuple[list[dict], int]:
+    """성적 추가·갱신 이력을 최신순 페이지 단위로 반환한다."""
+    query = (
+        get_supabase_iidx()
+        .table("score_uploads")
+        .select(
+            "id, play_style, source, uploaded_at, added_chart_count, updated_chart_count",
+            count="exact",
+        )
+        .eq("user_id", user_id)
+    )
+    if play_style is not None:
+        query = query.eq("play_style", play_style)
+    result = (
+        query.order("uploaded_at", desc=True)
+        .order("id", desc=True)
+        .range((page - 1) * per_page, page * per_page - 1)
+        .execute()
+    )
+    return result.data or [], result.count or 0
 
 
 def get_chart_scores_by_upload(upload_id: str, user_id: str) -> list[dict]:
