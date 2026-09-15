@@ -138,6 +138,29 @@ def delete_refresh_cookie(
     response.delete_cookie(REFRESH_COOKIE, path=_refresh_cookie_path(request, ctx))
 
 
+def require_cookie_request_origin(request: Request) -> None:
+    """쿠키 인증으로 상태를 바꾸는 요청의 CSRF를 차단한다.
+
+    허용된 FE 오리진(CORS·OAuth 리다이렉트 목록)에서 온 브라우저 POST만 허용한다.
+    Bearer 인증 경로는 호출자가 토큰을 명시적으로 보내므로 이 검사가 필요 없다.
+    """
+    origin = request.headers.get("origin")
+    allowed: set[str] = set()
+    for configured_url in (
+        *settings.CORS_ORIGINS,
+        *settings.OAUTH_ALLOWED_REDIRECT_URLS,
+        *settings.ADMIN_ALLOWED_REDIRECT_URLS,
+    ):
+        try:
+            parts = urlsplit(configured_url)
+        except ValueError:
+            continue
+        if parts.scheme in ("http", "https") and parts.netloc:
+            allowed.add(f"{parts.scheme}://{parts.netloc}")
+    if origin is None or origin not in allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="허용되지 않은 요청 출처입니다.")
+
+
 def set_state_cookie(response: Response, state: str) -> None:
     response.set_cookie(
         STATE_COOKIE,

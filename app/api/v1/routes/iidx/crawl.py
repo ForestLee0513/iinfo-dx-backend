@@ -31,6 +31,7 @@ from app.services.iidx.admin import jobs, store
 from app.services.iidx.admin import targets as admin_targets
 from app.services.iidx.difficulty_crawl import scheduler
 from app.services.iidx.difficulty_crawl.crawlers import CRAWLER_REGISTRY, get_crawler as get_table_crawler
+from app.services.iidx.difficulty_crawl.url_policy import validate_target_url
 from app.services.iidx.songs_crawl.crawlers.base import SONG_CRAWLER_REGISTRY, get_crawler as get_song_crawler
 from app.schemas.iidx.crawl import (
     CrawlJob,
@@ -90,6 +91,15 @@ def _apply_slug_default(config: dict) -> None:
     """
     if config.get("kind") == "table" and not (config.get("slug") or "").strip():
         config["slug"] = config["id"]
+
+
+def _validate_target_url(config: dict) -> None:
+    """URL을 쓰는 크롤러의 SSRF 방어 정책을 생성·수정 시점에도 적용한다."""
+    if config.get("kind") == "table" and config.get("crawler") == "5ch_sheet":
+        try:
+            validate_target_url("5ch_sheet", config.get("url"))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
 
 async def _reject_duplicate_target(config: dict, exclude_key: str | None = None) -> None:
@@ -157,6 +167,7 @@ async def create_crawl_target(body: CrawlTargetCreateRequest, user: AdminUser):
         )
     config = body.model_dump()
     _apply_slug_default(config)
+    _validate_target_url(config)
     await _reject_duplicate_target(config)
     await store.save_target(target_key, config)
     logger.info("크롤 대상 생성: %s (by %s)", target_key, user.email)
@@ -180,8 +191,14 @@ async def update_crawl_target(target_key: str, body: CrawlTargetUpdateRequest, u
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"등록되지 않은 크롤러: {body.crawler} (사용 가능: {list(registry)})",
         )
-    config = {"kind": target["kind"], "id": target["id"], **body.model_dump()}
+    # 추가 설정은 허용하지만, extra=allow인 본문으로 경로에서 고정한 서비스
+    # 식별자(kind/id)를 덮어써 URL 정책·스케줄 키의 전제를 깨지 못하게 한다.
+    updates = body.model_dump()
+    updates.pop("kind", None)
+    updates.pop("id", None)
+    config = {"kind": target["kind"], "id": target["id"], **updates}
     _apply_slug_default(config)
+    _validate_target_url(config)
     await _reject_duplicate_target(config, exclude_key=target_key)
     await store.save_target(target_key, config)
     logger.info("크롤 대상 수정: %s -> %s (by %s)", target_key, config, user.email)
@@ -207,6 +224,7 @@ async def preview(body: CrawlPreviewRequest):
     """선택한 크롤러를 실제 크롤 경로 그대로 실행해 결과를 반환한다. Supabase에는 반영하지 않는다."""
     # 제공되지 않은(None) 필드는 제외해 크롤러의 필수값 누락(KeyError→422) 판별을 유지한다.
     target = {**body.target.model_dump(exclude_none=True), "crawler": body.crawler}
+    _validate_target_url({"kind": body.kind, **target})
 
     if body.kind == "song":
         if body.crawler not in SONG_CRAWLER_REGISTRY:
@@ -293,6 +311,7 @@ async def trigger_crawl(body: JobCreateRequest, user: AdminUser):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"등록되지 않은 크롤러: {crawler_name} (사용 가능: {list(registry)})",
             )
+        _validate_target_url({"kind": body.scope, **body.target})
     try:
         job = await jobs.create_job(
             scope=body.scope,

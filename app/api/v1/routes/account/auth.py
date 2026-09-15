@@ -175,6 +175,7 @@ async def email_signup(
     body: ac.SignupBody, request: Request, response: Response
 ):
     """이메일/비밀번호 가입. 이메일 확인이 켜져 있으면 세션 없이 확인 메일만 발송된다."""
+    ac.require_cookie_request_origin(request)
     try:
         data = await auth_service.sign_up(body.email, body.password)
     except auth_service.AuthServiceError as e:
@@ -216,6 +217,7 @@ async def email_signup(
 )
 async def email_login(body: ac.EmailCredentials, request: Request, response: Response):
     """이메일/비밀번호 로그인 — access token은 본문, refresh token은 쿠키로."""
+    ac.require_cookie_request_origin(request)
     try:
         data = await auth_service.sign_in_with_password(body.email, body.password)
     except auth_service.AuthServiceError as e:
@@ -238,6 +240,7 @@ async def refresh_session(request: Request, response: Response):
     rotation — 새 refresh token이 쿠키로 재발급되고 이전 것은 폐기된다.
     FE는 본문 없이 credentials 포함 POST만 하면 된다.
     """
+    ac.require_cookie_request_origin(request)
     token = request.cookies.get(ac.REFRESH_COOKIE)
     if token is None:
         raise HTTPException(
@@ -282,6 +285,8 @@ async def logout(
 
     access_token = credentials.credentials if credentials else None
     cookie_token = request.cookies.get(ac.REFRESH_COOKIE)
+    if access_token is None and cookie_token:
+        ac.require_cookie_request_origin(request)
     try:
         if access_token is None and cookie_token:
             data = await auth_service.refresh_session(cookie_token)
