@@ -85,6 +85,7 @@ def _to_response(
         following_count=following_count,
         is_following=is_following,
         joined_services=row.get("joined_services") or [],
+        service_visibility=row.get("service_visibility") or {},
     )
 
 
@@ -126,12 +127,12 @@ def get_profile(identifier: str, identity: OptionalIdentity):
 
 @router.patch(
     "/me",
-    summary="내 프로필 수정 (handle/nickname/social_links/is_public)",
+    summary="내 프로필 수정 (플랫폼/서비스별 공개 여부 포함)",
     response_model=ProfileResponse,
     openapi_extra=PUBLIC,
 )
 def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
-    """본인 프로필 중 handle/nickname/social_links/is_public을 수정한다(부분 업데이트).
+    """본인 프로필과 가입한 서비스의 공개 여부를 부분 수정한다.
 
     요청 본문에 없는 필드는 그대로 유지된다. handle을 null로 보내면 핸들을
     해제하고, 이미 다른 사용자가 쓰는 handle이면 409를 반환한다. nickname은
@@ -163,6 +164,12 @@ def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
             "is_public": user.is_public,
             "role": user.app_role.value,
         }
+
+    if "service_visibility" in fields and body.service_visibility is not None:
+        # 서비스 가입 행이 없는 키와 아직 지원하지 않는 서비스 키는 CRUD에서 무시한다.
+        row = crud_profiles.update_joined_service_visibility(
+            user.id, body.service_visibility
+        )
 
     return _to_response(
         row,

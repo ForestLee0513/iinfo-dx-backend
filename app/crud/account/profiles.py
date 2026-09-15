@@ -89,6 +89,7 @@ def _merge_row(pub: dict) -> dict:
     role = _effective_role(pub.get("platform_role"), (svc or {}).get("service_role"))
     # 서비스 추가 시 온보딩 여부를 여기서 함께 확인한다(_fetch_svc 재호출 없이).
     joined_services: list[str] = ["iidx"] if svc is not None else []
+    service_visibility = {"iidx": bool(svc["is_public"])} if svc is not None else {}
     return {
         "user_id": pub["id"],
         "is_public": bool(pub["is_public"]),
@@ -107,6 +108,7 @@ def _merge_row(pub: dict) -> dict:
         "arena_class": (svc or {}).get("arena_class"),
         "profile_image_url": pub.get("profile_image_url"),
         "joined_services": joined_services,
+        "service_visibility": service_visibility,
     }
 
 
@@ -235,6 +237,20 @@ def update_iidx_editable_fields(user_id: str, *, is_public: Any = _UNSET) -> dic
         payload["is_public"] = is_public
     if payload:
         get_supabase_iidx().table("profiles").update(payload).eq("user_id", user_id).execute()
+    return get_profile_row(user_id) or {}
+
+
+def update_joined_service_visibility(user_id: str, visibility: dict[str, bool]) -> dict:
+    """가입한 서비스의 프로필 공개 여부만 일괄 갱신한다.
+
+    현재 서비스 프로필은 IIDX만 존재한다. 알 수 없거나 아직 가입하지 않은 서비스는
+    의도적으로 무시한다. 따라서 클라이언트가 보유한 예전/다른 서비스 설정을 함께
+    보내더라도 서비스 가입 행을 새로 만들지 않는다.
+    """
+    if "iidx" in visibility and _fetch_svc(user_id) is not None:
+        get_supabase_iidx().table("profiles").update(
+            {"is_public": visibility["iidx"]}
+        ).eq("user_id", user_id).execute()
     return get_profile_row(user_id) or {}
 
 

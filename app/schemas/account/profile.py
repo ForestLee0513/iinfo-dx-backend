@@ -54,6 +54,8 @@ class ProfileResponse(BaseModel):
     # 익명 요청이거나 본인 프로필을 볼 때는 의미가 없으므로 None
     is_following: bool | None = None
     joined_services: list[str] = Field(default_factory=list)
+    # 가입한 서비스의 개별 프로필 공개 여부. 키는 서비스명(예: iidx)이다.
+    service_visibility: dict[str, bool] = Field(default_factory=dict)
 
 
 class IidxProfileResponse(ProfileResponse):
@@ -104,13 +106,15 @@ class ProfileUpdateRequest(BaseModel):
     handle을 null로 보내면 핸들을 해제(release)한다. nickname은 handle과 달리
     유일하지 않아도 되는 일반 표시용 닉네임이며, null로 보내면 닉네임을 해제한다.
     social_links는 보낸 목록 전체로 치환된다(부분 추가/삭제가 아니라 통째로 교체).
-    is_public은 프로필 공개 여부를 전환한다.
+    is_public은 플랫폼 프로필 공개 여부를 전환한다. service_visibility는
+    서비스명별 공개 여부를 한 번에 전환한다. 가입하지 않은 서비스 키는 무시한다.
     """
 
     handle: str | None = None
     nickname: str | None = None
     social_links: list[SocialLink] | None = None
     is_public: bool | None = None
+    service_visibility: dict[str, bool] | None = None
 
     @field_validator("handle")
     @classmethod
