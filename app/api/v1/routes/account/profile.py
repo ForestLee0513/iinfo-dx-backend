@@ -13,9 +13,12 @@
 - GET /{identifier}/followers, /following — 인증 불필요(옵셔널). 대상
   프로필이 비공개면 본인 또는 상호 팔로우 관계만 조회 가능 — GET /{identifier}와
   동일한 규칙.
+- GET /search?q=&service= — 서비스별 공개 프로필 자동완성. 각 후보의 profile_path로 이동한다.
 """
 
+import asyncio
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -27,6 +30,8 @@ from app.schemas.account.profile import (
     HANDLE_LOOKUP_PATTERN,
     FollowListResponse,
     FollowUserSummary,
+    ProfileSearchResponse,
+    ProfileSearchSuggestion,
     ProfileResponse,
     ProfileUpdateRequest,
 )
@@ -115,6 +120,50 @@ def _to_response(
         is_following=is_following,
         joined_services=row.get("joined_services") or [],
         service_visibility=row.get("service_visibility") or {},
+    )
+
+
+@router.get(
+    "/search",
+    summary="서비스별 공개 프로필 자동완성 검색",
+    response_model=ProfileSearchResponse,
+    openapi_extra=PUBLIC,
+)
+async def search_profiles(
+    q: str = Query(
+        ..., min_length=1, max_length=50, description="선택한 서비스 범위의 검색어"
+    ),
+    service: Literal["iidx", "iinfo_dx"] = Query(
+        "iidx", description="검색 범위: iidx=DJ ID·DJ NAME, iinfo_dx=IInfo DX handle"
+    ),
+    limit: int = Query(8, ge=1, le=20, description="반환할 최대 후보 수"),
+):
+    """검색창 입력 중 호출할 서비스별 공개 프로필 자동완성 API.
+
+    `profile_path`를 프런트 라우터에 전달하면 클릭한 후보의 서비스 프로필 화면으로
+    이동할 수 있다. ``iidx``는 DJ ID·DJ NAME, ``iinfo_dx``는 handle만 검색한다.
+    """
+    query = q.strip()
+    search_query = query.removeprefix("@") if service == "iinfo_dx" else query
+    if not search_query:
+        return ProfileSearchResponse(query=query, service=service)
+    rows = await asyncio.to_thread(
+        crud_profiles.search_profile_suggestions, search_query, service, limit
+    )
+    return ProfileSearchResponse(
+        query=query,
+        service=service,
+        results=[
+            ProfileSearchSuggestion(
+                **row,
+                profile_path=(
+                    f"/iidx/profiles/{row['id']}"
+                    if service == "iidx"
+                    else f"/profile/{row['handle'] or row['id']}"
+                ),
+            )
+            for row in rows
+        ],
     )
 
 
