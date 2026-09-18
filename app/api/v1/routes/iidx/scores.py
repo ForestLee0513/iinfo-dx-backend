@@ -458,9 +458,17 @@ async def get_score_update_calendar(
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
     since_utc = datetime.combine(since_date, time.min, tzinfo=zone).astimezone(timezone.utc)
-    rows = await asyncio.to_thread(crud_scores.get_score_update_dates, user_id, style, since_utc)
+    rows, year_rows = await asyncio.gather(
+        asyncio.to_thread(crud_scores.get_score_update_dates, user_id, style, since_utc),
+        asyncio.to_thread(crud_scores.get_score_update_year_dates, user_id, style),
+    )
     return build_score_update_calendar(
-        rows, style=style, tz=tz, since=since_date, until=until_date
+        rows,
+        style=style,
+        tz=tz,
+        since=since_date,
+        until=until_date,
+        year_rows=year_rows,
     )
 
 

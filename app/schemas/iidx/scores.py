@@ -185,6 +185,7 @@ class ScoreUpdateCalendarResponse(BaseModel):
 
     style: str | None = None
     tz: str
+    available_years: list[int]  # 실제 연동 이력이 있는 연도(요청 tz 기준, 최신순)
     since: date
     until: date
     total: int  # 기간 전체 added + updated

@@ -53,6 +53,7 @@ def build_score_update_calendar(
     tz: str,
     since: date,
     until: date,
+    year_rows: list[dict] | None = None,
 ) -> ScoreUpdateCalendarResponse:
     """(uploaded_at, added/updated_chart_count) 행을 날짜별 성적 변경 수로 합산한다."""
     zone = ZoneInfo(tz)
@@ -73,10 +74,18 @@ def build_score_update_calendar(
 
     added_total = sum(count.added for count in counts.values())
     updated_total = sum(count.updated for count in counts.values())
+    available_years = sorted(
+        {
+            datetime.fromisoformat(row["uploaded_at"]).astimezone(zone).year
+            for row in (year_rows if year_rows is not None else rows)
+        },
+        reverse=True,
+    )
 
     return ScoreUpdateCalendarResponse(
         style=style,
         tz=tz,
+        available_years=available_years,
         since=since,
         until=until,
         total=added_total + updated_total,
