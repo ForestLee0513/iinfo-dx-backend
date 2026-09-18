@@ -31,8 +31,11 @@ Repository Actions secrets에 다음 값을 등록합니다.
 
 | 이름 | 값 |
 | --- | --- |
-| `TAILSCALE_AUTHKEY` | `tag:ci`가 붙은 재사용 가능·임시 Tailscale auth key. Tailnet ACL에서 ForestLee의 TCP 22 접근 허용 |
+| `TS_OAUTH_CLIENT_ID` | Tailscale OAuth 클라이언트 ID (`auth_keys` Write, `tag:ci`) |
+| `TS_OAUTH_SECRET` | 같은 OAuth 클라이언트의 secret |
 | `FORESTLEE_SSH_PRIVATE_KEY` | Actions 전용 Ed25519 개인 키 전체 내용 |
+
+Tailscale 접근 정책에서 `tag:ci`가 ForestLee의 TCP 22에 연결할 수 있어야 합니다.
 
 ForestLee의 확인된 Ed25519 호스트 키는 워크플로에 고정해 두었습니다. SSH 키가 변경되면 새 키를 별도로 검증한 뒤 워크플로를 갱신합니다.
 
