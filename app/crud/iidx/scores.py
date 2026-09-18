@@ -335,6 +335,33 @@ def get_score_update_dates(
     return result.data or []
 
 
+def get_score_update_year_dates(user_id: str, play_style: str | None = None) -> list[dict]:
+    """연동 이력이 있는 연도 계산용 업로드 시각을 반환한다.
+
+    캘린더의 현재 조회 기간과 별개로 전체 이력을 읽어, FE가 하드코딩 없이
+    연도 선택지를 만들 수 있게 한다.
+    """
+    # Supabase Data API의 행 수 상한을 넘는 오래된 이력도 누락하지 않는다.
+    page_size = 1000
+    offset = 0
+    rows: list[dict] = []
+    while True:
+        query = (
+            get_supabase_iidx()
+            .table("score_uploads")
+            .select("uploaded_at")
+            .eq("user_id", user_id)
+        )
+        if play_style is not None:
+            query = query.eq("play_style", play_style)
+        result = query.order("uploaded_at").range(offset, offset + page_size - 1).execute()
+        page = result.data or []
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+        offset += page_size
+
+
 def list_score_update_history(
     user_id: str, play_style: str | None, page: int, per_page: int
 ) -> tuple[list[dict], int]:
