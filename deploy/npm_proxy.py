@@ -60,7 +60,7 @@ def set_target(slot: str) -> None:
     matches = [host for host in hosts if DOMAIN in host.get("domain_names", [])]
     if len(matches) > 1:
         raise RuntimeError(f"Multiple NPM proxy hosts match {DOMAIN}")
-    target = f"iinfo-production-{slot}"
+    target = f"iinfo-dx-production-{slot}"
     if matches:
         host = matches[0]
         advanced = host.get("advanced_config") or ""

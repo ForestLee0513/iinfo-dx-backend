@@ -1,4 +1,4 @@
-name: iinfo-production
+name: iinfo-dx-production
 
 x-api: &api
   env_file: ${DEPLOY_ENV_FILE:?Set DEPLOY_ENV_FILE}
@@ -36,8 +36,8 @@ services:
 
   blue:
     <<: *api
-    image: ${BLUE_IMAGE:-iinfo-backend:bootstrap}
-    container_name: iinfo-production-blue
+    image: ${BLUE_IMAGE:-iinfo-dx-backend:bootstrap}
+    container_name: iinfo-dx-production-blue
     environment:
       ENVIRONMENT: production
       REDIS_URL: redis://redis:6379/0
@@ -46,8 +46,8 @@ services:
 
   green:
     <<: *api
-    image: ${GREEN_IMAGE:-iinfo-backend:bootstrap}
-    container_name: iinfo-production-green
+    image: ${GREEN_IMAGE:-iinfo-dx-backend:bootstrap}
+    container_name: iinfo-dx-production-green
     environment:
       ENVIRONMENT: production
       REDIS_URL: redis://redis:6379/0

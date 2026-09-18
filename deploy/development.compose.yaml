@@ -1,11 +1,11 @@
-name: iinfo-development
+name: iinfo-dx-development
 
 services:
   api:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: iinfo-development-api
+    container_name: iinfo-dx-development-api
     env_file: ${DEPLOY_ENV_FILE:?Set DEPLOY_ENV_FILE}
     environment:
       ENVIRONMENT: development
