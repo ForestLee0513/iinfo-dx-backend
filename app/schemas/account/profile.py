@@ -7,6 +7,7 @@ ProfileResponse는 플랫폼 수준 공통 프로필(public.profiles)만 담는�
 
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -97,6 +98,26 @@ class FollowUserSummary(BaseModel):
     handle: str | None = None
     nickname: str | None = None
     profile_image_url: str | None = None
+
+
+class ProfileSearchSuggestion(BaseModel):
+    """프로필 검색 자동완성 항목 — profile_path로 해당 서비스 화면으로 이동한다."""
+
+    id: str
+    handle: str | None = None
+    nickname: str | None = None
+    dj_name: str | None = None
+    dj_id: str | None = None
+    profile_image_url: str | None = None
+    profile_path: str
+
+
+class ProfileSearchResponse(BaseModel):
+    """GET /profile/search 응답 — 검색어와 자동완성 후보 목록."""
+
+    query: str
+    service: Literal["iidx", "iinfo_dx"]
+    results: list[ProfileSearchSuggestion] = Field(default_factory=list)
 
 
 class FollowListResponse(BaseModel):

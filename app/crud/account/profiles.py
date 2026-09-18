@@ -171,6 +171,116 @@ def get_profile_row_by_handle(handle: str) -> dict | None:
     return _merge_row(result.data)
 
 
+def _escape_ilike_query(query: str) -> str:
+    """사용자 입력을 ILIKE의 리터럴 문자열로 이스케이프한다."""
+    return (
+        query.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
+def _ilike_or_filter(columns: tuple[str, ...], query: str) -> str:
+    """PostgREST ``or`` 필터에 넣을 부분 일치 조건을 안전하게 만든다."""
+    escaped = _escape_ilike_query(query)
+    pattern = f'"%{escaped}%"'
+    return ",".join(f"{column}.ilike.{pattern}" for column in columns)
+
+
+def search_profile_suggestions(query: str, service: str, limit: int) -> list[dict]:
+    """서비스별 공개 프로필 자동완성 후보를 반환한다.
+
+    - ``iinfo_dx``: 프런트의 IInfo DX 범위와 같이 public.profiles.handle만 검색한다.
+    - ``iidx``: 프런트의 IIDX 범위와 같이 iidx.profiles.dj_id/dj_name만 검색한다.
+
+    서비스 역할 키를 쓰더라도 공개 설정을 명시적으로 적용해 비공개 계정이
+    검색으로 노출되지 않게 한다.
+    """
+    if service == "iinfo_dx":
+        rows = (
+            get_supabase()
+            .table("profiles")
+            .select("id, handle, nickname, profile_image_url")
+            .eq("is_public", True)
+            .ilike("handle", f"%{_escape_ilike_query(query)}%")
+            .limit(limit)
+            .execute()
+            .data
+            or []
+        )
+        needle = query.casefold()
+        return [
+            {
+                "id": row["id"],
+                "handle": row.get("handle"),
+                "nickname": row.get("nickname"),
+                "profile_image_url": row.get("profile_image_url"),
+            }
+            for row in sorted(
+                rows,
+                key=lambda row: (
+                    0 if (row.get("handle") or "").casefold().startswith(needle) else 1,
+                    (row.get("handle") or "").casefold(),
+                    row["id"],
+                ),
+            )
+        ]
+
+    iidx_matches = (
+        get_supabase_iidx()
+        .table("profiles")
+        .select("user_id, dj_name, dj_id")
+        .eq("is_public", True)
+        .or_(_ilike_or_filter(("dj_id", "dj_name"), query))
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    candidate_ids = [row["user_id"] for row in iidx_matches]
+    if not candidate_ids:
+        return []
+
+    public_rows = (
+        get_supabase()
+        .table("profiles")
+        .select("id, handle, nickname, profile_image_url")
+        .eq("is_public", True)
+        .in_("id", candidate_ids)
+        .execute()
+        .data
+        or []
+    )
+    public_by_id = {row["id"]: row for row in public_rows}
+
+    results: list[dict] = []
+    for iidx in iidx_matches:
+        user_id = iidx["user_id"]
+        public = public_by_id.get(user_id)
+        if public is None:
+            continue
+        results.append(
+            {
+                "id": user_id,
+                "handle": public.get("handle"),
+                "nickname": public.get("nickname"),
+                "dj_name": iidx.get("dj_name"),
+                "dj_id": iidx.get("dj_id"),
+                "profile_image_url": public.get("profile_image_url"),
+            }
+        )
+
+    needle = query.casefold()
+
+    def rank(row: dict) -> tuple[int, str, str]:
+        values = (row.get("dj_id"), row.get("dj_name"))
+        starts_with = any(value and value.casefold().startswith(needle) for value in values)
+        return (0 if starts_with else 1, (row.get("dj_name") or "").casefold(), row["id"])
+
+    return sorted(results, key=rank)[:limit]
+
+
 def get_profile_summaries(user_ids: list[str]) -> dict[str, dict]:
     """팔로워/팔로잉 목록 렌더링용 — user_id로 색인한 {handle, nickname, profile_image_url} 맵.
 
