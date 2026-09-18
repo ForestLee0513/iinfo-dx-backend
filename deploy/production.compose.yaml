@@ -1,0 +1,63 @@
+name: iinfo-production
+
+x-api: &api
+  env_file: ${DEPLOY_ENV_FILE:?Set DEPLOY_ENV_FILE}
+  environment:
+    ENVIRONMENT: production
+    REDIS_URL: redis://redis:6379/0
+    TZ: Asia/Seoul
+  networks:
+    - default
+    - proxy
+  depends_on:
+    redis:
+      condition: service_healthy
+  healthcheck:
+    test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+    interval: 10s
+    timeout: 5s
+    retries: 12
+    start_period: 60s
+  restart: unless-stopped
+  stop_grace_period: 2m
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, 'yes']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  blue:
+    <<: *api
+    image: ${BLUE_IMAGE:-iinfo-backend:bootstrap}
+    container_name: iinfo-production-blue
+    environment:
+      ENVIRONMENT: production
+      REDIS_URL: redis://redis:6379/0
+      TZ: Asia/Seoul
+      DEPLOY_SHA: ${BLUE_SHA:-unknown}
+
+  green:
+    <<: *api
+    image: ${GREEN_IMAGE:-iinfo-backend:bootstrap}
+    container_name: iinfo-production-green
+    environment:
+      ENVIRONMENT: production
+      REDIS_URL: redis://redis:6379/0
+      TZ: Asia/Seoul
+      DEPLOY_SHA: ${GREEN_SHA:-unknown}
+
+networks:
+  proxy:
+    external: true
+    name: services_proxy
+
+volumes:
+  redis-data:

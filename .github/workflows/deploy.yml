@@ -1,0 +1,58 @@
+name: Deploy to ForestLee
+
+on:
+  push:
+    branches: [development, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forestlee-iinfo-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref_name == 'development' || github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}
+    timeout-minutes: 45
+    steps:
+      - name: Join Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: 100.73.242.113
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.FORESTLEE_SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' '100.73.242.113 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIbiZBeEcOHDUpSBN793Mx3+BW6XrR/Y86jEumJsPrBz' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Clone and deploy exact commit
+        env:
+          DEPLOY_BRANCH: ${{ github.ref_name }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes forestlee@100.73.242.113 \
+            bash -s -- "$DEPLOY_BRANCH" "$DEPLOY_SHA" <<'REMOTE'
+          set -euo pipefail
+          branch=$1
+          sha=$2
+          [[ $branch == development || $branch == main ]]
+          [[ $sha =~ ^[0-9a-f]{40}$ ]]
+          root=/home/forestlee/deploy/iinfo
+          mkdir -p "$root"
+          if [[ ! -d $root/repo/.git ]]; then
+            git clone https://github.com/ForestLee0513/iinfo-dx-backend.git "$root/repo"
+          fi
+          git -C "$root/repo" fetch --no-tags origin "$branch"
+          git -C "$root/repo" checkout --force --detach "$sha"
+          bash "$root/repo/deploy/deploy.sh" "$branch" "$sha"
+          REMOTE

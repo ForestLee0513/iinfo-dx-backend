@@ -1,0 +1,49 @@
+name: iinfo-development
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: iinfo-development-api
+    env_file: ${DEPLOY_ENV_FILE:?Set DEPLOY_ENV_FILE}
+    environment:
+      ENVIRONMENT: development
+      REDIS_URL: redis://redis:6379/0
+      TZ: Asia/Seoul
+      DEPLOY_SHA: ${DEPLOY_SHA:-unknown}
+    ports:
+      - 127.0.0.1:18081:8000
+    networks:
+      - default
+      - proxy
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, 'yes']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
+    name: services_proxy
+
+volumes:
+  redis-data:
