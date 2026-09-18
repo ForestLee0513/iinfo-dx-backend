@@ -23,7 +23,7 @@
 
 NPM 호스트의 고급 설정에는 `/internal`, 관리자 경로, 크롤 작업·스케줄·대상 상세 경로의 공개 접근 차단 규칙을 추가합니다. 대상 목록의 쓰기 요청은 앱의 ADMIN 인증으로 보호됩니다.
 
-ForestLee의 `~/services/stacks/cloudflare-ddns/compose.yaml`에는 이 도메인을 추가해 두었습니다. 실제 DNS 레코드는 해당 DDNS 컨테이너를 갱신하면 생성됩니다. API와 NPM 프록시 호스트가 준비되기 전에는 갱신하지 않습니다.
+ForestLee의 `~/services/stacks/cloudflare-ddns/compose.yaml`에 이 도메인을 추가했고, DDNS 컨테이너를 갱신해 Cloudflare A 레코드를 생성했습니다. 공개 HTTPS 건강 검사도 통과했습니다.
 
 ## GitHub Actions 준비
 
