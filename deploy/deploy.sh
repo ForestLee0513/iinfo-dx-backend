@@ -7,7 +7,7 @@ sha=${2:?commit SHA required}
 [[ $branch == development || $branch == main ]] || { echo 'Invalid branch' >&2; exit 2; }
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-state_dir=${DEPLOY_STATE_DIR:-/home/forestlee/deploy/iinfo}
+state_dir=${DEPLOY_STATE_DIR:-/home/forestlee/deploy/iinfo-dx}
 mkdir -p "$state_dir/env"
 exec 9>"$state_dir/deploy.lock"
 flock -x 9
@@ -38,7 +38,7 @@ if [[ $branch == development ]]; then
   # Development intentionally has a stop/start window.
   "${compose[@]}" stop api || true
   "${compose[@]}" up -d --build --force-recreate api
-  wait_healthy iinfo-development-api
+  wait_healthy iinfo-dx-development-api
   echo "Development deployed: $sha"
   exit 0
 fi
@@ -56,7 +56,7 @@ active=$(cat "$active_file" 2>/dev/null || true)
 [[ -z $active || $active == blue || $active == green ]] || { echo 'Invalid active slot' >&2; exit 1; }
 if [[ $active == blue ]]; then candidate=green; else candidate=blue; fi
 
-image="iinfo-backend:$sha"
+image="iinfo-dx-backend:$sha"
 docker build -t "$image" "$repo"
 if [[ $candidate == blue ]]; then
   export BLUE_IMAGE=$image BLUE_SHA=$sha
@@ -64,7 +64,7 @@ else
   export GREEN_IMAGE=$image GREEN_SHA=$sha
 fi
 "${compose[@]}" up -d --no-deps --force-recreate "$candidate"
-if ! wait_healthy "iinfo-production-$candidate"; then
+if ! wait_healthy "iinfo-dx-production-$candidate"; then
   "${compose[@]}" stop "$candidate"
   exit 1
 fi

@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: forestlee-iinfo-deploy
+  group: forestlee-iinfo-dx-deploy
   cancel-in-progress: false
 
 jobs:
@@ -47,7 +47,7 @@ jobs:
           sha=$2
           [[ $branch == development || $branch == main ]]
           [[ $sha =~ ^[0-9a-f]{40}$ ]]
-          root=/home/forestlee/deploy/iinfo
+          root=/home/forestlee/deploy/iinfo-dx
           mkdir -p "$root"
           if [[ ! -d $root/repo/.git ]]; then
             git clone https://github.com/ForestLee0513/iinfo-dx-backend.git "$root/repo"
