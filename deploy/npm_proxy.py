@@ -70,6 +70,7 @@ def set_target(slot: str) -> None:
             "forward_scheme": "http",
             "forward_host": target,
             "forward_port": 8000,
+            "enabled": True,
             "advanced_config": advanced,
         })
     else:
