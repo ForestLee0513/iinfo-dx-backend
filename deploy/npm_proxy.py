@@ -74,6 +74,7 @@ def set_target(slot: str) -> None:
             "forward_scheme": "http",
             "forward_host": target,
             "forward_port": 8000,
+            "access_list_id": 0,
             "enabled": True,
             "advanced_config": advanced,
         })
@@ -83,6 +84,7 @@ def set_target(slot: str) -> None:
             "forward_scheme": "http",
             "forward_host": target,
             "forward_port": 8000,
+            "access_list_id": 0,
             "certificate_id": wildcard_certificate(token),
             "ssl_forced": True,
             "http2_support": True,
