@@ -133,7 +133,7 @@ async def delete_user(user_id: str) -> None:
     """Supabase Admin API로 사용자 계정을 영구 삭제한다."""
     async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT) as client:
         response = await client.delete(
-            f"{settings.SUPABASE_URL}/auth/v1/iidx/admin/users/{user_id}",
+            f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
             headers=_admin_headers(),
         )
     if not response.is_success:
@@ -144,7 +144,7 @@ async def get_user_by_id(user_id: str) -> dict:
     """Supabase Admin API로 단일 사용자 정보를 조회한다."""
     async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT) as client:
         response = await client.get(
-            f"{settings.SUPABASE_URL}/auth/v1/iidx/admin/users/{user_id}",
+            f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
             headers=_admin_headers(),
         )
     if not response.is_success:
@@ -156,7 +156,7 @@ async def update_user_metadata(user_id: str, app_metadata: dict) -> dict:
     """Supabase Admin API로 사용자의 app_metadata를 업데이트한다 (부분 병합)."""
     async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT) as client:
         response = await client.put(
-            f"{settings.SUPABASE_URL}/auth/v1/iidx/admin/users/{user_id}",
+            f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
             json={"app_metadata": app_metadata},
             headers=_admin_headers(),
         )

@@ -23,10 +23,13 @@ from app.schemas.account.user import UserRole
 
 # public.profiles에서 프로필 표시에 필요한 컬럼
 _PUBLIC_COLUMNS = (
-    "id, handle, social_links, profile_image_url, is_public, platform_role, updated_at"
+    "id, handle, nickname, social_links, profile_image_url, is_public, platform_role, updated_at"
 )
 # iidx.profiles에서 서비스 전용 필드
-_SVC_COLUMNS = "dj_name, dj_id, service_role, is_public"
+_SVC_COLUMNS = (
+    "dj_name, dj_id, community_nickname, play_count, notes_radar, dan, arena_class, "
+    "service_role, is_public"
+)
 
 # update_editable_fields에서 '전달 안 함'과 'null로 명시적으로 지움'을 구분하기
 # 위한 내부 전용 sentinel — 호출자는 이 값을 알 필요 없이 키워드를 생략하면 된다.
@@ -55,6 +58,13 @@ class HandleTakenError(Exception):
         super().__init__(f"이미 사용 중인 handle입니다: {handle}")
 
 
+class HandleImmutableError(Exception):
+    """한 번 지정된 handle을 변경하거나 해제하려 한 경우."""
+
+    def __init__(self):
+        super().__init__("이미 지정된 handle은 변경할 수 없습니다.")
+
+
 def _effective_role(platform_role: str | None, service_role: str | None) -> UserRole:
     """두 테이블의 역할을 단일 유효 역할로 합성한다.
 
@@ -81,9 +91,12 @@ def _fetch_svc(user_id: str) -> dict | None:
 
 
 def _merge_row(pub: dict) -> dict:
-    """public.profiles 행 + iidx.profiles 행을 예전 평탄한 프로필 dict로 합친다."""
+    """public.profiles 행 + iidx.profiles 행을 평탄한 프로필 dict로 합친다."""
     svc = _fetch_svc(pub["id"])
     role = _effective_role(pub.get("platform_role"), (svc or {}).get("service_role"))
+    # 서비스 추가 시 온보딩 여부를 여기서 함께 확인한다(_fetch_svc 재호출 없이).
+    joined_services: list[str] = ["iidx"] if svc is not None else []
+    service_visibility = {"iidx": bool(svc["is_public"])} if svc is not None else {}
     return {
         "user_id": pub["id"],
         "is_public": bool(pub["is_public"]),
@@ -91,10 +104,18 @@ def _merge_row(pub: dict) -> dict:
         "role": role.value,
         "updated_at": pub.get("updated_at"),
         "handle": pub.get("handle"),
+        "nickname": pub.get("nickname"),
         "social_links": pub.get("social_links") or [],
         "dj_name": (svc or {}).get("dj_name"),
         "dj_id": (svc or {}).get("dj_id"),
+        "community_nickname": (svc or {}).get("community_nickname"),
+        "play_count": (svc or {}).get("play_count"),
+        "notes_radar": (svc or {}).get("notes_radar"),
+        "dan": (svc or {}).get("dan"),
+        "arena_class": (svc or {}).get("arena_class"),
         "profile_image_url": pub.get("profile_image_url"),
+        "joined_services": joined_services,
+        "service_visibility": service_visibility,
     }
 
 
@@ -150,18 +171,128 @@ def get_profile_row_by_handle(handle: str) -> dict | None:
     return _merge_row(result.data)
 
 
+def _escape_ilike_query(query: str) -> str:
+    """사용자 입력을 ILIKE의 리터럴 문자열로 이스케이프한다."""
+    return (
+        query.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
+def _ilike_or_filter(columns: tuple[str, ...], query: str) -> str:
+    """PostgREST ``or`` 필터에 넣을 부분 일치 조건을 안전하게 만든다."""
+    escaped = _escape_ilike_query(query)
+    pattern = f'"%{escaped}%"'
+    return ",".join(f"{column}.ilike.{pattern}" for column in columns)
+
+
+def search_profile_suggestions(query: str, service: str, limit: int) -> list[dict]:
+    """서비스별 공개 프로필 자동완성 후보를 반환한다.
+
+    - ``iinfo_dx``: 프런트의 IInfo DX 범위와 같이 public.profiles.handle만 검색한다.
+    - ``iidx``: 프런트의 IIDX 범위와 같이 iidx.profiles.dj_id/dj_name만 검색한다.
+
+    서비스 역할 키를 쓰더라도 공개 설정을 명시적으로 적용해 비공개 계정이
+    검색으로 노출되지 않게 한다.
+    """
+    if service == "iinfo_dx":
+        rows = (
+            get_supabase()
+            .table("profiles")
+            .select("id, handle, nickname, profile_image_url")
+            .eq("is_public", True)
+            .ilike("handle", f"%{_escape_ilike_query(query)}%")
+            .limit(limit)
+            .execute()
+            .data
+            or []
+        )
+        needle = query.casefold()
+        return [
+            {
+                "id": row["id"],
+                "handle": row.get("handle"),
+                "nickname": row.get("nickname"),
+                "profile_image_url": row.get("profile_image_url"),
+            }
+            for row in sorted(
+                rows,
+                key=lambda row: (
+                    0 if (row.get("handle") or "").casefold().startswith(needle) else 1,
+                    (row.get("handle") or "").casefold(),
+                    row["id"],
+                ),
+            )
+        ]
+
+    iidx_matches = (
+        get_supabase_iidx()
+        .table("profiles")
+        .select("user_id, dj_name, dj_id")
+        .eq("is_public", True)
+        .or_(_ilike_or_filter(("dj_id", "dj_name"), query))
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    candidate_ids = [row["user_id"] for row in iidx_matches]
+    if not candidate_ids:
+        return []
+
+    public_rows = (
+        get_supabase()
+        .table("profiles")
+        .select("id, handle, nickname, profile_image_url")
+        .eq("is_public", True)
+        .in_("id", candidate_ids)
+        .execute()
+        .data
+        or []
+    )
+    public_by_id = {row["id"]: row for row in public_rows}
+
+    results: list[dict] = []
+    for iidx in iidx_matches:
+        user_id = iidx["user_id"]
+        public = public_by_id.get(user_id)
+        if public is None:
+            continue
+        results.append(
+            {
+                "id": user_id,
+                "handle": public.get("handle"),
+                "nickname": public.get("nickname"),
+                "dj_name": iidx.get("dj_name"),
+                "dj_id": iidx.get("dj_id"),
+                "profile_image_url": public.get("profile_image_url"),
+            }
+        )
+
+    needle = query.casefold()
+
+    def rank(row: dict) -> tuple[int, str, str]:
+        values = (row.get("dj_id"), row.get("dj_name"))
+        starts_with = any(value and value.casefold().startswith(needle) for value in values)
+        return (0 if starts_with else 1, (row.get("dj_name") or "").casefold(), row["id"])
+
+    return sorted(results, key=rank)[:limit]
+
+
 def get_profile_summaries(user_ids: list[str]) -> dict[str, dict]:
-    """팔로워/팔로잉 목록 렌더링용 — user_id로 색인한 {handle, profile_image_url} 맵.
+    """팔로워/팔로잉 목록 렌더링용 — user_id로 색인한 {handle, nickname, profile_image_url} 맵.
 
     N+1 조회를 피하려고 IN절로 한 번에 가져온다. 없는 id는 결과에서 빠진다.
-    표시에 필요한 handle/profile_image_url은 모두 public.profiles에 있다.
+    표시에 필요한 handle/nickname/profile_image_url은 모두 public.profiles에 있다.
     """
     if not user_ids:
         return {}
     result = (
         get_supabase()
         .table("profiles")
-        .select("id, handle, profile_image_url")
+        .select("id, handle, nickname, profile_image_url")
         .in_("id", user_ids)
         .execute()
     )
@@ -172,19 +303,25 @@ def update_editable_fields(
     user_id: str,
     *,
     handle: Any = _UNSET,
+    nickname: Any = _UNSET,
     social_links: Any = _UNSET,
     is_public: Any = _UNSET,
 ) -> dict:
-    """본인이 API로 바꿀 수 있는 필드(handle, social_links, is_public)만 부분 업데이트한다.
+    """본인이 API로 바꿀 수 있는 필드(handle, nickname, social_links, is_public)만 부분 업데이트한다.
 
-    세 필드 모두 public.profiles에 있다. 키워드를 아예 생략하면 해당 필드는
-    변경하지 않는다. handle=None으로 명시하면 핸들을 해제(release)한다. 프로필
-    행은 가입 트리거로 이미 존재하지만, 안전하게 upsert(PK=id)로 처리한다.
-    handle 중복(DB unique 제약 위반, code 23505)은 HandleTakenError로 변환한다.
+    네 필드 모두 public.profiles에 있다. 키워드를 아예 생략하면 해당 필드는
+    변경하지 않는다. handle은 최초 한 번만 지정할 수 있으며, 지정 뒤에는 변경하거나
+    해제할 수 없다. 프로필 행은 가입 트리거로 이미 존재하지만, 안전하게
+    upsert(PK=id)로 처리한다. handle 중복(DB unique 제약 위반, code 23505)은
+    HandleTakenError로, handle 변경 방지 트리거(code P0001)는
+    HandleImmutableError로 변환한다.
+    nickname은 unique 제약이 없어(중복 허용) 같은 예외가 발생하지 않는다.
     """
     payload: dict = {"id": user_id}
     if handle is not _UNSET:
         payload["handle"] = handle
+    if nickname is not _UNSET:
+        payload["nickname"] = nickname
     if social_links is not _UNSET:
         payload["social_links"] = social_links if social_links is not None else []
     if is_public is not _UNSET:
@@ -196,6 +333,8 @@ def update_editable_fields(
         except APIError as e:
             if getattr(e, "code", None) == "23505":
                 raise HandleTakenError(handle if handle is not _UNSET else None) from e
+            if getattr(e, "code", None) == "P0001":
+                raise HandleImmutableError() from e
             raise
 
     return get_profile_row(user_id) or {}
@@ -220,6 +359,67 @@ def update_iidx_editable_fields(user_id: str, *, is_public: Any = _UNSET) -> dic
     if payload:
         get_supabase_iidx().table("profiles").update(payload).eq("user_id", user_id).execute()
     return get_profile_row(user_id) or {}
+
+
+def update_joined_service_visibility(user_id: str, visibility: dict[str, bool]) -> dict:
+    """가입한 서비스의 프로필 공개 여부만 일괄 갱신한다.
+
+    현재 서비스 프로필은 IIDX만 존재한다. 알 수 없거나 아직 가입하지 않은 서비스는
+    의도적으로 무시한다. 따라서 클라이언트가 보유한 예전/다른 서비스 설정을 함께
+    보내더라도 서비스 가입 행을 새로 만들지 않는다.
+    """
+    if "iidx" in visibility and _fetch_svc(user_id) is not None:
+        get_supabase_iidx().table("profiles").update(
+            {"is_public": visibility["iidx"]}
+        ).eq("user_id", user_id).execute()
+    return get_profile_row(user_id) or {}
+
+
+def sync_iidx_stats(
+    user_id: str,
+    *,
+    dj_name: str | None = None,
+    dj_id: str | None = None,
+    community_nickname: str | None = None,
+    play_count: int | None = None,
+    notes_radar: dict | None = None,
+    dan: dict | None = None,
+    arena_class: dict | None = None,
+) -> None:
+    """북마크릿이 수집한 IIDX 프로필(크롤러 Profile)을 iidx.profiles에 반영한다.
+
+    전달된(None이 아닌) 필드만 갱신한다 — 부분 업데이트. iidx.profiles 행이 없으면
+    (미온보딩) upsert로 새로 만들어 온보딩한다 — 북마크릿 업로드가 곧 IIDX 온보딩이다.
+    새 행은 service_role=USER, is_public=true 등 컬럼 기본값을 따른다.
+    notes_radar/dan/arena_class는 {SP, DP} 구조의 dict를 그대로 jsonb 컬럼에 저장한다.
+    """
+    payload: dict = {"user_id": user_id}
+    if dj_name is not None:
+        payload["dj_name"] = dj_name
+    if dj_id is not None:
+        payload["dj_id"] = dj_id
+    if community_nickname is not None:
+        payload["community_nickname"] = community_nickname
+    if play_count is not None:
+        payload["play_count"] = play_count
+    if notes_radar is not None:
+        payload["notes_radar"] = notes_radar
+    if dan is not None:
+        payload["dan"] = dan
+    if arena_class is not None:
+        payload["arena_class"] = arena_class
+    # user_id 외에 실제 프로필 필드가 하나라도 있을 때만 기록(빈 온보딩 방지).
+    if len(payload) > 1:
+        get_supabase_iidx().table("profiles").upsert(payload, on_conflict="user_id").execute()
+
+
+def delete_iidx_profile(user_id: str) -> None:
+    """iidx.profiles 행을 삭제한다 — IIDX 서비스 탈퇴(온보딩 해제).
+
+    행 존재 여부가 곧 온보딩 여부이므로(is_iidx_member) 이 삭제만으로 서비스
+    탈퇴가 완료된다. 계정 자체(public.profiles/auth.users)는 그대로 남는다.
+    """
+    get_supabase_iidx().table("profiles").delete().eq("user_id", user_id).execute()
 
 
 def upsert_is_public(user_id: str, is_public: bool) -> None:

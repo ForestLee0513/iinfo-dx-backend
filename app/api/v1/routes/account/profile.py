@@ -11,21 +11,27 @@
   추후 북마크릿 데이터 갱신 파이프라인이 채운다).
 - POST/DELETE /{identifier}/follow — 인증 필수. 팔로우/언팔로우(둘 다 멱등).
 - GET /{identifier}/followers, /following — 인증 불필요(옵셔널). 대상
-  프로필이 비공개면 본인만 조회 가능 — GET /{identifier}와 동일한 규칙.
+  프로필이 비공개면 본인 또는 상호 팔로우 관계만 조회 가능 — GET /{identifier}와
+  동일한 규칙.
+- GET /search?q=&service= — 서비스별 공개 프로필 자동완성. 각 후보의 profile_path로 이동한다.
 """
 
+import asyncio
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CurrentUser, OptionalIdentity, TokenIdentity
 from app.core.openapi import PUBLIC
 from app.crud.account import follows as crud_follows, profiles as crud_profiles
-from app.crud.account.profiles import HandleTakenError
+from app.crud.account.profiles import HandleImmutableError, HandleTakenError
 from app.schemas.account.profile import (
-    HANDLE_PATTERN,
+    HANDLE_LOOKUP_PATTERN,
     FollowListResponse,
     FollowUserSummary,
+    ProfileSearchResponse,
+    ProfileSearchSuggestion,
     ProfileResponse,
     ProfileUpdateRequest,
 )
@@ -34,12 +40,38 @@ from app.schemas.account.user import UserRole
 router = APIRouter()
 
 
+def _merge_social_links(existing: list[dict], updates: list) -> list[dict]:
+    """URL이 비어 있는 플랫폼은 기존 링크를 유지하며 소셜 링크 목록을 갱신한다.
+
+    목록에 아예 없는 플랫폼은 기존 PATCH 규약대로 제거한다. URL이 비어 있는데
+    기존 링크도 없으면 새 빈 링크를 만들지 않는다.
+    """
+    existing_by_platform = {
+        str(link.get("platform", "")).strip().casefold(): link
+        for link in existing
+        if isinstance(link, dict) and str(link.get("platform", "")).strip()
+    }
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for link in updates:
+        platform = link.platform.strip()
+        key = platform.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if link.url:
+            merged.append({"platform": platform, "url": link.url})
+        elif key in existing_by_platform:
+            merged.append(existing_by_platform[key])
+    return merged
+
+
 def _resolve_row(identifier: str) -> dict | None:
     """identifier(UUID 또는 handle)로 user_profiles 행을 찾는다. 없으면 None."""
     try:
         uuid.UUID(identifier)
     except ValueError:
-        if not HANDLE_PATTERN.match(identifier):
+        if not HANDLE_LOOKUP_PATTERN.match(identifier):
             return None
         return crud_profiles.get_profile_row_by_handle(identifier)
     return crud_profiles.get_profile_row(identifier)
@@ -48,13 +80,15 @@ def _resolve_row(identifier: str) -> dict | None:
 def _require_visible_row(
     identifier: str, identity: TokenIdentity | None
 ) -> tuple[dict, bool]:
-    """대상 프로필을 찾아 (row, is_mine)을 반환한다. 없거나 비공개면 404."""
+    """대상 프로필을 찾아 (row, is_mine)을 반환한다. 비공개는 본인/상호 팔로워만 허용한다."""
     row = _resolve_row(identifier)
     if row is None:
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
     user_id = row["user_id"]
     is_mine = identity is not None and identity.id == user_id
-    if not row["is_public"] and not is_mine:
+    if not row["is_public"] and not crud_follows.can_view_private_profile(
+        identity.id if identity is not None else None, user_id
+    ):
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
     return row, is_mine
 
@@ -72,6 +106,7 @@ def _to_response(
     return ProfileResponse(
         id=row["user_id"],
         handle=row.get("handle"),
+        nickname=row.get("nickname"),
         role=UserRole(row.get("role", "USER")),
         is_public=bool(row["is_public"]),
         social_links=row.get("social_links") or [],
@@ -83,6 +118,52 @@ def _to_response(
         followers_count=followers_count,
         following_count=following_count,
         is_following=is_following,
+        joined_services=row.get("joined_services") or [],
+        service_visibility=row.get("service_visibility") or {},
+    )
+
+
+@router.get(
+    "/search",
+    summary="서비스별 공개 프로필 자동완성 검색",
+    response_model=ProfileSearchResponse,
+    openapi_extra=PUBLIC,
+)
+async def search_profiles(
+    q: str = Query(
+        ..., min_length=1, max_length=50, description="선택한 서비스 범위의 검색어"
+    ),
+    service: Literal["iidx", "iinfo_dx"] = Query(
+        "iidx", description="검색 범위: iidx=DJ ID·DJ NAME, iinfo_dx=IInfo DX handle"
+    ),
+    limit: int = Query(8, ge=1, le=20, description="반환할 최대 후보 수"),
+):
+    """검색창 입력 중 호출할 서비스별 공개 프로필 자동완성 API.
+
+    `profile_path`를 프런트 라우터에 전달하면 클릭한 후보의 서비스 프로필 화면으로
+    이동할 수 있다. ``iidx``는 DJ ID·DJ NAME, ``iinfo_dx``는 handle만 검색한다.
+    """
+    query = q.strip()
+    search_query = query.removeprefix("@") if service == "iinfo_dx" else query
+    if not search_query:
+        return ProfileSearchResponse(query=query, service=service)
+    rows = await asyncio.to_thread(
+        crud_profiles.search_profile_suggestions, search_query, service, limit
+    )
+    return ProfileSearchResponse(
+        query=query,
+        service=service,
+        results=[
+            ProfileSearchSuggestion(
+                **row,
+                profile_path=(
+                    f"/iidx/profiles/{row['id']}"
+                    if service == "iidx"
+                    else f"/profile/{row['handle'] or row['id']}"
+                ),
+            )
+            for row in rows
+        ],
     )
 
 
@@ -98,8 +179,8 @@ def get_profile(identifier: str, identity: OptionalIdentity):
     - identifier가 UUID면 user_id로, 아니면 handle로 조회한다(UUID도 handle
       패턴도 아니면 DB 조회 없이 바로 404).
     - 프로필 행이 없으면(가입 트리거 도입 이전 계정 등) 404.
-    - is_public=False인 비공개 프로필은 본인만 조회 가능 — 그 외엔 존재 여부를
-      노출하지 않기 위해 403 대신 404.
+    - is_public=False인 비공개 프로필은 본인 또는 상호 팔로워만 조회 가능 — 그 외엔
+      존재 여부를 노출하지 않기 위해 403 대신 404.
     - 요청에 유효한 Authorization 토큰이 있고 그 sub가 조회된 user_id와 같으면
       is_mine=true와 함께 email/provider를 채운다.
     - is_following은 로그인한 타인이 볼 때만 값이 채워진다(익명/본인 조회는 null).
@@ -124,23 +205,29 @@ def get_profile(identifier: str, identity: OptionalIdentity):
 
 @router.patch(
     "/me",
-    summary="내 프로필 수정 (handle/social_links/is_public)",
+    summary="내 프로필 수정 (플랫폼/서비스별 공개 여부 포함)",
     response_model=ProfileResponse,
     openapi_extra=PUBLIC,
 )
 def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
-    """본인 프로필 중 handle/social_links/is_public을 수정한다(부분 업데이트).
+    """본인 프로필과 가입한 서비스의 공개 여부를 부분 수정한다.
 
-    요청 본문에 없는 필드는 그대로 유지된다. handle을 null로 보내면 핸들을
-    해제하고, 이미 다른 사용자가 쓰는 handle이면 409를 반환한다.
+    요청 본문에 없는 필드는 그대로 유지된다. handle은 아직 지정하지 않은 경우에만
+    최초 설정할 수 있으며, 지정 후 변경 또는 해제 요청은 409를 반환한다. nickname은
+    다른 사용자와 중복돼도 되므로 409 없이 그대로 저장된다.
     """
     fields = body.model_fields_set
     kwargs = {}
     if "handle" in fields:
         kwargs["handle"] = body.handle
+    if "nickname" in fields:
+        kwargs["nickname"] = body.nickname
     if "social_links" in fields:
         kwargs["social_links"] = (
-            [link.model_dump() for link in body.social_links]
+            _merge_social_links(
+                (crud_profiles.get_profile_row(user.id) or {}).get("social_links") or [],
+                body.social_links,
+            )
             if body.social_links is not None
             else []
         )
@@ -152,12 +239,22 @@ def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
             row = crud_profiles.update_editable_fields(user.id, **kwargs)
         except HandleTakenError:
             raise HTTPException(status_code=409, detail="이미 사용 중인 handle입니다.")
+        except HandleImmutableError:
+            raise HTTPException(
+                status_code=409, detail="이미 지정된 handle은 변경할 수 없습니다."
+            )
     else:
         row = crud_profiles.get_profile_row(user.id) or {
             "user_id": user.id,
             "is_public": user.is_public,
             "role": user.app_role.value,
         }
+
+    if "service_visibility" in fields and body.service_visibility is not None:
+        # 서비스 가입 행이 없는 키와 아직 지원하지 않는 서비스 키는 CRUD에서 무시한다.
+        row = crud_profiles.update_joined_service_visibility(
+            user.id, body.service_visibility
+        )
 
     return _to_response(
         row,
@@ -208,6 +305,7 @@ def _to_follow_list(
         FollowUserSummary(
             id=uid,
             handle=summaries.get(uid, {}).get("handle"),
+            nickname=summaries.get(uid, {}).get("nickname"),
             profile_image_url=summaries.get(uid, {}).get("profile_image_url"),
         )
         for uid in ids
