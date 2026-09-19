@@ -120,6 +120,8 @@ async def upload_scores(user: UploadUser, body: ScoreUploadRequest):
                 play_style=style,
                 source=result.source,
                 song_count=result.song_count,
+                added_chart_count=result.added_chart_count,
+                updated_chart_count=result.updated_chart_count,
                 uploaded_at=result.uploaded_at,
                 changed=result.changed,
             )
