@@ -1,4 +1,4 @@
-"""ForestLee의 Nginx Proxy Manager 프록시 대상을 blue/green 슬롯으로 전환한다."""
+"""ForestLee의 Nginx Proxy Manager 개발·운영 프록시 대상을 설정한다."""
 
 import json
 import os
@@ -9,7 +9,6 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 BASE = "http://127.0.0.1:81/api"
-DOMAIN = "iinfo-dx-api.forestlee.me"
 ACCESS_RULES = """# iinfo-dx-api public-domain restrictions
 if ($request_uri ~ "^/internal(/|$)") { return 403; }
 if ($request_uri ~ "^/api/v1/(admin|iidx/admin)(/|$)") { return 403; }
@@ -52,15 +51,20 @@ def wildcard_certificate(token: str) -> int:
 
 
 def set_target(slot: str) -> None:
-    if slot not in {"blue", "green"}:
-        raise RuntimeError("Slot must be blue or green")
+    if slot == "development":
+        domain = "iinfo-dx-api-dev.forestlee.me"
+        target = "iinfo-dx-development-api"
+    elif slot in {"blue", "green"}:
+        domain = "iinfo-dx-api.forestlee.me"
+        target = f"iinfo-dx-production-{slot}"
+    else:
+        raise RuntimeError("Target must be development, blue, or green")
     auth = request("POST", "/tokens", payload=credentials())
     token = auth["token"]
     hosts = request("GET", "/nginx/proxy-hosts", token)
-    matches = [host for host in hosts if DOMAIN in host.get("domain_names", [])]
+    matches = [host for host in hosts if domain in host.get("domain_names", [])]
     if len(matches) > 1:
-        raise RuntimeError(f"Multiple NPM proxy hosts match {DOMAIN}")
-    target = f"iinfo-dx-production-{slot}"
+        raise RuntimeError(f"Multiple NPM proxy hosts match {domain}")
     if matches:
         host = matches[0]
         advanced = host.get("advanced_config") or ""
@@ -75,7 +79,7 @@ def set_target(slot: str) -> None:
         })
     else:
         request("POST", "/nginx/proxy-hosts", token, {
-            "domain_names": [DOMAIN],
+            "domain_names": [domain],
             "forward_scheme": "http",
             "forward_host": target,
             "forward_port": 8000,
@@ -86,7 +90,7 @@ def set_target(slot: str) -> None:
             "allow_websocket_upgrade": True,
             "advanced_config": ACCESS_RULES,
         })
-    print(f"NPM {DOMAIN} -> {target}")
+    print(f"NPM {domain} -> {target}")
 
 
 if __name__ == "__main__":

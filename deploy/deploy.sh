@@ -7,7 +7,7 @@ sha=${2:?commit SHA required}
 [[ $branch == development || $branch == main ]] || { echo 'Invalid branch' >&2; exit 2; }
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-state_dir=${DEPLOY_STATE_DIR:-/home/forestlee/deploy/iinfo-dx}
+state_dir=${DEPLOY_STATE_DIR:-/home/forestlee/deploy/iinfo-dx-backend}
 mkdir -p "$state_dir/env"
 exec 9>"$state_dir/deploy.lock"
 flock -x 9
@@ -30,8 +30,10 @@ wait_healthy() {
 
 if [[ $branch == development ]]; then
   export DEPLOY_ENV_FILE="$state_dir/env/development.env"
+  export NPM_CREDENTIALS="$state_dir/npm-credentials.json"
   export DEPLOY_SHA="$sha"
   [[ -s $DEPLOY_ENV_FILE ]] || { echo "Create $DEPLOY_ENV_FILE first" >&2; exit 1; }
+  [[ -s $NPM_CREDENTIALS ]] || { echo "Create $NPM_CREDENTIALS first" >&2; exit 1; }
   python3 "$repo/deploy/check_env.py" "$DEPLOY_ENV_FILE" gooxuqvpxpzmofddcuow
   compose=(docker compose -f "$repo/deploy/development.compose.yaml")
   "${compose[@]}" up -d redis
@@ -39,6 +41,22 @@ if [[ $branch == development ]]; then
   "${compose[@]}" stop api || true
   "${compose[@]}" up -d --build --force-recreate api
   wait_healthy iinfo-dx-development-api
+  python3 "$repo/deploy/npm_proxy.py" development
+  headers=$(mktemp)
+  route_healthy=false
+  for ((attempt=0; attempt<10; attempt++)); do
+    if curl --fail --silent --show-error --max-time 10 -D "$headers" \
+        --noproxy '*' \
+        --resolve iinfo-dx-api-dev.forestlee.me:443:127.0.0.1 \
+        https://iinfo-dx-api-dev.forestlee.me/api/v1/health >/dev/null \
+        && tr -d '\r' < "$headers" | grep -qi "^X-Deploy-Commit: $sha$"; then
+      route_healthy=true
+      break
+    fi
+    sleep 2
+  done
+  rm -f "$headers"
+  [[ $route_healthy == true ]] || { echo 'Development NPM route health check failed' >&2; exit 1; }
   echo "Development deployed: $sha"
   exit 0
 fi
