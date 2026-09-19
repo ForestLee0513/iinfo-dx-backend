@@ -49,7 +49,7 @@ jobs:
           sha=$2
           [[ $branch == development || $branch == main ]]
           [[ $sha =~ ^[0-9a-f]{40}$ ]]
-          root=/home/forestlee/deploy/iinfo-dx
+          root=/home/forestlee/deploy/iinfo-dx-backend
           mkdir -p "$root"
           if [[ ! -d $root/repo/.git ]]; then
             git clone https://github.com/ForestLee0513/iinfo-dx-backend.git "$root/repo"
