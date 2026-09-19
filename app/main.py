@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,7 @@ from app.core.openapi import setup_docs
 from app.db.redis import close_redis
 from app.services.iidx.admin import jobs as admin_jobs
 from app.services.iidx.difficulty_crawl import scheduler
+from app.services.iidx.scores import storage as score_storage
 
 logging.basicConfig(level=logging.INFO)
 
@@ -20,6 +22,8 @@ async def lifespan(app: FastAPI):
     await scheduler.start()
     # 서버 중단으로 끊긴 크롤 작업이 있으면 남은 스텝부터 이어서 실행
     await admin_jobs.resume_interrupted_job()
+    # 성적 CSV 버킷이 없으면 생성 (멱등)
+    await asyncio.to_thread(score_storage.ensure_bucket)
     yield
     scheduler.shutdown()
     await close_redis()

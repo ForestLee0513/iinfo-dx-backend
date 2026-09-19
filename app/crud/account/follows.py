@@ -32,6 +32,17 @@ def is_following(follower_id: str, followee_id: str) -> bool:
     return bool(result and result.data)
 
 
+def can_view_private_profile(viewer_id: str | None, profile_owner_id: str) -> bool:
+    """비공개 프로필은 본인 또는 상호 팔로우 관계에서만 볼 수 있다."""
+    if viewer_id is None:
+        return False
+    if viewer_id == profile_owner_id:
+        return True
+    return is_following(viewer_id, profile_owner_id) and is_following(
+        profile_owner_id, viewer_id
+    )
+
+
 def followers_count(user_id: str) -> int:
     sb = get_supabase()
     result = (

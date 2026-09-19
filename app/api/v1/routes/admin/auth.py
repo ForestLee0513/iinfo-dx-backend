@@ -201,6 +201,7 @@ async def admin_email_login(
 
     access token은 본문, refresh token은 쿠키(/admin/auth 스코프)로.
     """
+    ac.require_cookie_request_origin(request)
     try:
         data = await auth_service.sign_in_with_password(body.email, body.password)
     except auth_service.AuthServiceError as e:
@@ -222,6 +223,7 @@ async def admin_refresh_session(request: Request, response: Response):
 
     갱신 시에도 ADMIN 역할을 재확인해, 권한이 회수된 계정은 여기서 막힌다.
     """
+    ac.require_cookie_request_origin(request)
     token = request.cookies.get(ac.REFRESH_COOKIE)
     if token is None:
         raise HTTPException(
@@ -257,6 +259,8 @@ async def admin_logout(
 
     access_token = credentials.credentials if credentials else None
     cookie_token = request.cookies.get(ac.REFRESH_COOKIE)
+    if access_token is None and cookie_token:
+        ac.require_cookie_request_origin(request)
     try:
         if access_token is None and cookie_token:
             data = await auth_service.refresh_session(cookie_token)

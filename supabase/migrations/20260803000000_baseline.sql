@@ -53,11 +53,13 @@ create schema iidx;
 create or replace function public.current_user_id()
 returns uuid
 language sql stable
+set search_path = ''
 as $$ select nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid $$;
 
 create or replace function public.touch_updated_at()
 returns trigger
 language plpgsql
+set search_path = ''
 as $$
 begin
   new.updated_at = now();
@@ -72,8 +74,17 @@ end $$;
 create table public.profiles (
   id                uuid primary key references auth.users(id) on delete cascade,
   handle            text unique
-                      check (handle is null or handle ~ '^[A-Za-z0-9_]{2,20}$'),
-  display_name      text,
+                      constraint profiles_handle_format_chk check (
+                        handle is null or (
+                          handle ~ '^[a-z0-9_.]{2,20}$'
+                          and handle !~ '\.\.'
+                        )
+                      ),
+  -- 일반 닉네임. handle과 달리 유일하지 않다(중복 허용) — 화면 표시용, 검색/조회 키는 handle.
+  -- 가입 트리거가 OAuth raw_user_meta_data->>'name'을 그대로 채우므로 길이 제약을
+  -- 걸지 않는다(실명은 20자를 흔히 넘김) — 사용자가 API로 직접 바꾸는 값의 길이
+  -- 제한은 ProfileUpdateRequest(Pydantic) 쪽에서만 강제한다.
+  nickname          text,
   profile_image_url text,
   social_links      jsonb not null default '[]'::jsonb
                       check (jsonb_typeof(social_links) = 'array'),
@@ -85,6 +96,24 @@ create table public.profiles (
   updated_at        timestamptz not null default now()
 );
 
+-- handle은 공개 프로필 검색 키이므로 최초 지정 후에는 변경하거나 해제할 수 없다.
+-- API 외 경로(service_role, SQL 등)로 수정하는 경우에도 같은 규칙을 적용한다.
+create or replace function public.prevent_handle_change()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if old.handle is not null and new.handle is distinct from old.handle then
+    raise exception '이미 지정된 handle은 변경할 수 없습니다.' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+
+create trigger profiles_handle_immutable
+  before update on public.profiles
+  for each row execute function public.prevent_handle_change();
+
 create trigger profiles_touch
   before update on public.profiles
   for each row execute function public.touch_updated_at();
@@ -95,8 +124,9 @@ returns trigger
 language plpgsql security definer set search_path = ''
 as $$
 begin
-  insert into public.profiles (id, display_name)
-  values (new.id, new.raw_user_meta_data ->> 'name');
+  -- 일부 provider는 이름이 없을 때 null 대신 빈 문자열을 준다 — nullif로 걸러낸다.
+  insert into public.profiles (id, nickname)
+  values (new.id, nullif(new.raw_user_meta_data ->> 'name', ''));
   return new;
 end $$;
 
@@ -104,6 +134,24 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- ---------------------------------------------------------------------------
+-- public.profiles.display_name → nickname 컬럼명 변경
+--
+-- baseline이 이미 적용되어 display_name 컬럼으로 테이블이 만들어진 환경에 대한
+-- 증분 마이그레이션(위 create table에는 이미 nickname으로 반영돼 있으므로 새
+-- 환경이라면 이 블록은 그냥 스킵된다). display_name 컬럼이 없으면(=이미 적용됨
+-- 또는 애초에 새 환경) 아무 것도 하지 않아 몇 번을 실행해도 안전하다.
+-- ---------------------------------------------------------------------------
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'display_name'
+  ) then
+    alter table public.profiles rename column display_name to nickname;
+  end if;
+end $$;
 
 
 -- 제재. service가 null이면 플랫폼 전체, 값이 있으면 해당 서비스에만 적용.
@@ -125,7 +173,7 @@ create index user_bans_active_idx
 
 create or replace function public.is_banned(p_service text default null)
 returns boolean
-language sql stable security definer set search_path = ''
+language sql stable security invoker set search_path = ''
 as $$
   select exists (
     select 1 from public.user_bans b
@@ -156,8 +204,15 @@ create index user_follows_followee_idx on public.user_follows (followee_id);
 
 create table iidx.profiles (
   user_id      uuid primary key references public.profiles(id) on delete cascade,
-  dj_name      text check (dj_name is null or dj_name ~ '^[A-Za-z0-9]{1,6}$'),
+  -- DJ NAME은 영숫자 외에 점/하이픈/공백도 쓰일 수 있어 허용한다 (예: "FRST-E").
+  dj_name      text check (dj_name is null or dj_name ~ '^[A-Za-z0-9 .-]{1,6}$'),
   dj_id        text check (dj_id   is null or dj_id   ~ '^[0-9]{4}-[0-9]{4}$'),
+  -- 북마크릿 프로필 크롤 결과 (크롤러 Profile 타입). 미크롤/미취득이면 null.
+  community_nickname text,                            -- 커뮤니티 닉네임 (#log-on)
+  play_count   integer check (play_count is null or play_count >= 0),  -- プレー回数
+  notes_radar  jsonb,                                 -- {SP:{notes..total}, DP:{...}}
+  dan          jsonb,                                 -- {SP:"10TH_DAN"|null, DP:...}
+  arena_class  jsonb,                                 -- {SP:"B4", DP:"---"}
   service_role text not null default 'USER'
                  check (service_role = any (array['USER', 'ADMIN'])),
   is_public    boolean not null default true,
@@ -167,7 +222,7 @@ create table iidx.profiles (
 -- 이 행의 존재 여부가 곧 "이 서비스에 온보딩했는가"의 답이다.
 create or replace function iidx.is_member()
 returns boolean
-language sql stable security definer set search_path = ''
+language sql stable security invoker set search_path = ''
 as $$
   select exists (
     select 1 from iidx.profiles
@@ -177,7 +232,7 @@ $$;
 
 create or replace function iidx.is_admin()
 returns boolean
-language sql stable security definer set search_path = ''
+language sql stable security invoker set search_path = ''
 as $$
   select exists (
     select 1 from iidx.profiles p
@@ -200,6 +255,9 @@ create table iidx.versions (
 create table iidx.songs (
   id          uuid primary key default gen_random_uuid(),
   title       text not null,
+  -- 성적 CSV(eagate) 타이틀이 마스터(textage) 표기와 달라 매칭 실패할 때 쓰는
+  -- 수동 별칭 목록. 매처가 title 매칭 실패 시 aliases 로 폴백 조회한다.
+  aliases     text[] not null default '{}',
   series      text unique,
   textage_tag text unique,
   genre       text,
@@ -214,6 +272,9 @@ create table iidx.songs (
 create trigger songs_touch
   before update on iidx.songs
   for each row execute function public.touch_updated_at();
+
+-- 별칭 조회용(관리자 검색 등). 매처는 전량 메모리 로드라 필수는 아니다.
+create index songs_aliases_idx on iidx.songs using gin (aliases);
 
 create table iidx.charts (
   id         uuid primary key default gen_random_uuid(),
@@ -356,14 +417,25 @@ create policy follows_write_self on public.user_follows
 create policy follows_delete_self on public.user_follows
   for delete using (follower_id = public.current_user_id());
 
-create policy iidx_profiles_read on iidx.profiles
-  for select using (true);
+-- 본인 행만 조회 가능 — anon/authenticated에 service_role 등 서비스 프로필
+-- 전체를 노출하지 않는다(공개 프로필 판단은 백엔드가 iidx_is_public으로 별도
+-- 수행하며, service_role 키로 조회하므로 이 RLS를 우회한다).
+create policy iidx_profiles_read_self on iidx.profiles
+  for select using (user_id = public.current_user_id());
 create policy iidx_profiles_join on iidx.profiles
   for insert with check (
-    user_id = public.current_user_id() and not public.is_banned('iidx'));
+    user_id = public.current_user_id()
+    and not public.is_banned('iidx')
+    and service_role = 'USER');
 create policy iidx_profiles_update_self on iidx.profiles
   for update using (user_id = public.current_user_id())
-  with check (user_id = public.current_user_id() and service_role = 'USER');
+  with check (
+    user_id = public.current_user_id()
+    -- service_role 값 자체는 바꿀 수 없게(승격 차단) 기존 값과 동일할 것만 요구.
+    -- 'USER'로 고정하면 ADMIN 본인이 자기 프로필(is_public 등)을 못 고치게 된다.
+    and service_role = (
+      select p.service_role from iidx.profiles p where p.user_id = public.current_user_id()
+    ));
 
 -- 악곡 마스터와 난이도표는 전체 공개 읽기, 쓰기는 서비스 관리자만
 do $$
@@ -386,19 +458,37 @@ end $$;
 -- ---------------------------------------------------------------------------
 
 grant usage on schema iidx to anon, authenticated;
-grant select on all tables in schema iidx to anon, authenticated;
+
+-- SELECT는 blanket("all tables" 후 필요 없는 것만 revoke)이 아니라 테이블별
+-- 화이트리스트로 부여한다. blanket 방식은 새 테이블을 추가할 때 revoke를
+-- 빠뜨리면 그대로 공개되는 구조적 함정이 있다 — 아래 alter default privileges도
+-- 같은 이유로 기본값을 "새 테이블은 기본 비공개"로 뒤집는다.
+grant select on iidx.songs, iidx.charts, iidx.versions,
+      iidx.difficulty_tables, iidx.difficulty_entries
+  to anon, authenticated;
+-- iidx.profiles는 서비스 프로필(dj_name/dj_id/dan 등)이라 공개 화이트리스트에
+-- 넣지 않는다. select는 authenticated에만 주고, 어느 행이 보이는지는
+-- iidx_profiles_read_self RLS(본인 행만)가 정한다.
+grant select on iidx.profiles to authenticated;
+
 grant insert, update, delete on iidx.profiles to authenticated;
-grant insert, update, delete on iidx.songs, iidx.charts,
-      iidx.versions, iidx.difficulty_tables,
-      iidx.difficulty_entries to authenticated;
-
-alter default privileges in schema iidx
-  grant select on tables to anon, authenticated;
-
--- 크롤 운영 테이블은 위 blanket SELECT까지 회수해 service_role 전용으로 확실히 막는다
--- (RLS 정책이 없어 행은 이미 안 보이지만, grant까지 없애 defense-in-depth).
-revoke select on iidx.crawl_targets, iidx.crawl_schedules, iidx.crawl_sync_logs
+-- Catalog writes are only performed by this backend's service_role client.
+-- Keeping browser roles read-only removes an otherwise unnecessary API path.
+revoke insert, update, delete on iidx.songs, iidx.charts,
+       iidx.versions, iidx.difficulty_tables, iidx.difficulty_entries
   from anon, authenticated;
+revoke all on iidx.crawl_targets, iidx.crawl_schedules, iidx.crawl_sync_logs
+  from anon, authenticated;
+
+-- 새로 추가되는 iidx 테이블은 기본적으로 anon/authenticated에 아무 권한도 주지
+-- 않는다. 공개해야 하면 위처럼 테이블별로 의식적으로 grant를 추가할 것.
+alter default privileges in schema iidx
+  revoke select on tables from anon, authenticated;
+
+-- 트리거 전용 함수: REST API(/rpc/...)를 통한 직접 호출 차단.
+-- 트리거는 role 권한이 아닌 트리거 오너 권한으로 실행되므로 동작에 영향 없음.
+revoke execute on function public.handle_new_user() from public;
+revoke execute on function public.touch_updated_at() from public;
 
 -- 백엔드 전용: service_role은 iidx 스키마 전체에 접근한다. Supabase는 public
 -- 스키마에 대해서만 service_role 기본 권한을 세팅해 두므로, 커스텀 스키마(iidx)에는
@@ -426,12 +516,25 @@ create or replace function iidx.sync_song_master(p_payload jsonb)
 returns jsonb
 language plpgsql
 security definer
-set search_path = iidx, public
+set search_path = iidx, public, pg_temp
 as $$
 declare
   v_songs_total  int;
   v_charts_total int;
 begin
+  -- This snapshot deactivates rows absent from the payload. Reject an empty or
+  -- malformed crawler result before it can turn the whole catalog inactive.
+  if jsonb_typeof(p_payload) <> 'object'
+     or jsonb_typeof(p_payload->'versions') <> 'array'
+     or jsonb_typeof(p_payload->'songs') <> 'array'
+     or jsonb_array_length(p_payload->'songs') = 0 then
+    raise exception 'sync_song_master requires non-empty versions and songs arrays'
+      using errcode = '22023';
+  end if;
+
+  -- Serialise full snapshots across scheduler workers and deployments.
+  perform pg_advisory_xact_lock(hashtextextended('iidx.sync_song_master', 0));
+
   -- 1) 버전 upsert
   insert into versions (id, name)
   select (v->>'id')::smallint, v->>'name'
@@ -440,6 +543,11 @@ begin
 
   -- 2) 곡 upsert (textage_tag 기준). in_ac은 크롤러가 판별한 값을 사용
   --    (actbl 상태플래그 bit0 — textage에서 tt2/firebrick로 표시되는 AC 삭제곡).
+  --
+  --    ⚠ aliases 컬럼은 do update set 에 절대 포함하지 말 것.
+  --    aliases 는 성적 매칭용으로 사람이 수동 등록하는 값이라, 크롤 payload 에
+  --    없으며 여기서 갱신하면 매 크롤마다 날아간다. update 대상에서 의도적으로
+  --    제외해 기존 값을 보존한다(신규 곡은 컬럼 기본값 '{}' 로 삽입됨).
   insert into songs (textage_tag, title, genre, artist, version, in_ac)
   select s->>'tag', s->>'title', s->>'genre', s->>'artist', (s->>'version')::smallint,
          coalesce((s->>'in_ac')::boolean, true)
@@ -451,6 +559,7 @@ begin
     version    = excluded.version,
     in_ac      = excluded.in_ac,
     updated_at = now();
+    -- (aliases 는 여기서 갱신하지 않음 — 위 주석 참고)
 
   -- 3) 채보 upsert
   insert into charts (song_id, play_style, difficulty, level, in_ac)
@@ -508,13 +617,23 @@ create or replace function iidx.sync_table_result(
 returns jsonb
 language plpgsql
 security definer
-set search_path = iidx, public
+set search_path = iidx, public, pg_temp
 as $$
 declare
   v_slug     text := p_table->>'slug';
   v_table_id uuid;
   v_count    int;
 begin
+  if jsonb_typeof(p_table) <> 'object' or nullif(v_slug, '') is null
+     or jsonb_typeof(coalesce(p_entries, '[]'::jsonb)) <> 'array' then
+    raise exception 'sync_table_result requires a table slug and an entries array'
+      using errcode = '22023';
+  end if;
+
+  -- Entries are replaced atomically; serialize only competing snapshots of
+  -- the same table so independent tables still sync concurrently.
+  perform pg_advisory_xact_lock(hashtextextended('iidx.sync_table_result:' || v_slug, 0));
+
   -- 1) 표 upsert (slug 기준), id 확보
   insert into difficulty_tables
     (slug, name, source, play_style, rating_type, level, grades, updated_at)
@@ -658,6 +777,107 @@ grant execute on function iidx.sync_song_master(jsonb)             to service_ro
 grant execute on function iidx.sync_table_result(jsonb, jsonb, text) to service_role;
 grant execute on function public.admin_list_users(text, text, boolean, text, int, int)
   to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 사용자 성적 CSV 업로드 · 스냅샷 · 파싱 데이터
+--
+-- baseline(20260803000000_baseline.sql)이 이미 적용된 환경에 대한 증분 마이그레이션.
+-- 새 환경이라면 baseline에 이 내용을 합쳐 적용해도 된다.
+--
+-- 테이블 구조:
+--   score_uploads      : CSV 업로드 이력 (Storage 경로 + 메타, 스냅샷 단위)
+--   score_current      : 사용자 × 스타일별 현재 활성 스냅샷 포인터
+--   user_chart_scores  : 파싱된 성적 데이터 (upload_id 단위 보관)
+--
+-- 스냅샷 복구는 score_current.upload_id 를 바꾸는 것으로 충분하다.
+-- 원본 CSV 는 Supabase Storage(iidx-score-csv 버킷)에 보관된다.
+-- ---------------------------------------------------------------------------
+
+create table iidx.score_uploads (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references public.profiles(id) on delete cascade,
+  play_style    text not null check (play_style = any(array['SP', 'DP'])),
+  -- official: eagate score_download 원본 / crawled: 북마크릿 재조합 CSV
+  source        text not null check (source = any(array['official', 'crawled'])),
+  content_hash  text not null,   -- SHA-256 hex (동일 내용 재업로드 감지)
+  storage_path  text not null,   -- Supabase Storage 버킷 내 상대 경로
+  song_count    integer not null default 0,
+  -- 직전 스냅샷에는 없던 신규 채보 수. 최초 업로드는 전체 채보를 신규로 센다.
+  added_chart_count integer not null default 0 check (added_chart_count >= 0),
+  -- 직전 스냅샷과 비교해 실제 성적이 바뀐 채보 수. 최초 업로드는 0이다.
+  updated_chart_count integer not null default 0 check (updated_chart_count >= 0),
+  uploaded_at   timestamptz not null default now(),
+  -- 동일 사용자·스타일·내용 중복 업로드 방지 (→ 스냅샷 미생성)
+  unique (user_id, play_style, content_hash)
+);
+
+create table iidx.score_current (
+  user_id    uuid not null references public.profiles(id) on delete cascade,
+  play_style text not null check (play_style = any(array['SP', 'DP'])),
+  upload_id  uuid not null references iidx.score_uploads(id),
+  applied_at timestamptz not null default now(),
+  primary key (user_id, play_style)
+);
+
+create table iidx.user_chart_scores (
+  upload_id      uuid not null references iidx.score_uploads(id) on delete cascade,
+  user_id        uuid not null references public.profiles(id) on delete cascade,
+  play_style     text not null check (play_style = any(array['SP', 'DP'])),
+  title          text not null,
+  difficulty     text not null
+                 check (difficulty = any(array['BEGINNER','NORMAL','HYPER','ANOTHER','LEGGENDARIA'])),
+  -- 공식 CSV 전용 필드 — 크롤 방식이면 null
+  version        text,
+  genre          text,
+  artist         text,
+  play_count     integer,
+  last_played_at timestamptz,
+  miss_count     integer,
+  -- 공통 성적
+  level          smallint not null,
+  ex_score       integer not null default 0,
+  pgreat         integer not null default 0,
+  great          integer not null default 0,
+  clear_type     text,
+  dj_level       text,
+  -- 곡 마스터 매칭 성공 시 채워짐 (타이틀 불일치 등으로 null 가능)
+  song_id        uuid references iidx.songs(id),
+  primary key (upload_id, title, difficulty)
+);
+
+-- RLS (service_role은 RLS 우회 — 백엔드는 service_role 키만 사용)
+alter table iidx.score_uploads        enable row level security;
+alter table iidx.score_current        enable row level security;
+alter table iidx.user_chart_scores    enable row level security;
+
+-- authenticated 사용자는 본인 데이터만 읽기/쓰기
+create policy score_uploads_self on iidx.score_uploads
+  for all to authenticated using (user_id = public.current_user_id())
+  with check (user_id = public.current_user_id());
+
+create policy score_current_self on iidx.score_current
+  for all to authenticated using (user_id = public.current_user_id())
+  with check (user_id = public.current_user_id());
+
+create policy user_chart_scores_self on iidx.user_chart_scores
+  for all to authenticated using (user_id = public.current_user_id())
+  with check (user_id = public.current_user_id());
+
+-- score 테이블은 "grant all on all tables in schema iidx"(line 앞쪽) 이후에 생성되므로
+-- blanket grant 적용 범위에 들지 않는다. 명시적으로 재부여.
+grant all privileges on iidx.score_uploads     to service_role;
+grant all privileges on iidx.score_current     to service_role;
+grant all privileges on iidx.user_chart_scores to service_role;
+
+-- authenticated: 본인 성적 조회는 허용(RLS로 본인 행만 보임). CSV 파싱 파이프라인을
+-- 우회한 성적 위조를 막기 위해 쓰기(insert/update/delete)는 주지 않는다 — 모든
+-- 쓰기는 백엔드가 service_role로만 수행한다.
+grant select on iidx.score_uploads     to authenticated;
+grant select on iidx.score_current     to authenticated;
+grant select on iidx.user_chart_scores to authenticated;
+
+-- 성적 데이터는 비공개 — anon에겐 select 차단 (defense-in-depth, crawl 테이블과 동일 패턴)
+revoke select on iidx.score_uploads, iidx.score_current, iidx.user_chart_scores from anon;
 
 commit;
 
