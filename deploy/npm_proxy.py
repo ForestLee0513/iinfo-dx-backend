@@ -9,11 +9,14 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 BASE = "http://127.0.0.1:81/api"
-ACCESS_RULES = """# iinfo-dx-api public-domain restrictions
+LEGACY_ACCESS_RULES = """# iinfo-dx-api public-domain restrictions
 if ($request_uri ~ "^/internal(/|$)") { return 403; }
 if ($request_uri ~ "^/api/v1/(admin|iidx/admin)(/|$)") { return 403; }
 if ($request_uri ~ "^/api/v1/iidx/crawl/(jobs|schedules)(/|$)") { return 403; }
 if ($request_uri ~ "^/api/v1/iidx/crawl/targets/") { return 403; }
+"""
+ACCESS_RULES = """# iinfo-dx-api public-domain restrictions
+if ($request_uri ~ "^/internal(/|$)") { return 403; }
 """
 
 
@@ -67,7 +70,9 @@ def set_target(slot: str) -> None:
         raise RuntimeError(f"Multiple NPM proxy hosts match {domain}")
     if matches:
         host = matches[0]
-        advanced = host.get("advanced_config") or ""
+        advanced = (host.get("advanced_config") or "").replace(
+            LEGACY_ACCESS_RULES, ACCESS_RULES
+        )
         if "# iinfo-dx-api public-domain restrictions" not in advanced:
             advanced += "\n" + ACCESS_RULES
         request("PUT", f"/nginx/proxy-hosts/{host['id']}", token, {
