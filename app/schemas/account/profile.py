@@ -134,7 +134,8 @@ class ProfileUpdateRequest(BaseModel):
 
     handle은 아직 없는 경우에만 최초 설정할 수 있고, 한 번 지정하면 변경하거나
     해제할 수 없다. nickname은 handle과 달리 유일하지 않아도 되는 일반 표시용
-    닉네임이며, null로 보내면 닉네임을 해제한다.
+    닉네임이며, null이거나 공백으로만 채워 보내면(비움) handle로 대체되어 저장된다
+    (handle이 아직 없으면 null로 저장된다).
     social_links는 보낸 목록 전체를 기준으로 갱신한다. 단, URL을 생략하거나 빈
     문자열로 보낸 플랫폼은 기존 URL을 유지한다.
     is_public은 플랫폼 프로필 공개 여부를 전환한다. service_visibility는
@@ -160,6 +161,10 @@ class ProfileUpdateRequest(BaseModel):
     @field_validator("nickname")
     @classmethod
     def _validate_nickname(cls, v: str | None) -> str | None:
-        if v is not None and not (1 <= len(v.strip()) <= 20):
-            raise ValueError("nickname은 1~20자여야 합니다.")
-        return v.strip() if v is not None else v
+        # 공백만 있는 값은 "닉네임 비움"으로 취급한다 — 라우터에서 handle로 대체된다.
+        if v is None:
+            return v
+        v = v.strip()
+        if v and len(v) > 20:
+            raise ValueError("nickname은 최대 20자여야 합니다.")
+        return v or None
