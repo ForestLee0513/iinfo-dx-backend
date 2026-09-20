@@ -214,18 +214,27 @@ def update_profile(body: ProfileUpdateRequest, user: CurrentUser):
 
     요청 본문에 없는 필드는 그대로 유지된다. handle은 아직 지정하지 않은 경우에만
     최초 설정할 수 있으며, 지정 후 변경 또는 해제 요청은 409를 반환한다. nickname은
-    다른 사용자와 중복돼도 되므로 409 없이 그대로 저장된다.
+    다른 사용자와 중복돼도 되므로 409 없이 그대로 저장된다. nickname을 공백으로
+    비워 보내면 handle로 대체되어 저장된다(handle이 없으면 null로 저장된다).
     """
     fields = body.model_fields_set
+    current_row = (
+        crud_profiles.get_profile_row(user.id)
+        if "social_links" in fields or ("nickname" in fields and body.nickname is None)
+        else None
+    )
     kwargs = {}
     if "handle" in fields:
         kwargs["handle"] = body.handle
     if "nickname" in fields:
-        kwargs["nickname"] = body.nickname
+        nickname = body.nickname
+        if nickname is None:
+            nickname = body.handle if "handle" in fields else (current_row or {}).get("handle")
+        kwargs["nickname"] = nickname
     if "social_links" in fields:
         kwargs["social_links"] = (
             _merge_social_links(
-                (crud_profiles.get_profile_row(user.id) or {}).get("social_links") or [],
+                (current_row or {}).get("social_links") or [],
                 body.social_links,
             )
             if body.social_links is not None
