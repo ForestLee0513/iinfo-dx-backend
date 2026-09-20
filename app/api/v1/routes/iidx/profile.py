@@ -172,15 +172,18 @@ def withdraw_iidx_profile(user: CurrentUser):
     미온보딩(iidx.profiles 행 없음) 상태면 404. score_uploads/score_current/
     user_chart_scores는 iidx.profiles가 아니라 public.profiles를 참조하므로
     on delete cascade로 자동 정리되지 않아 여기서 직접 지운다. 순서는
-    (1) storage 경로 조회 → (2) 성적 테이블 삭제 → (3) storage 파일 삭제 →
-    (4) iidx.profiles 삭제(온보딩 해제) — 마지막에 지워야 중간에 실패해도
+    (1) storage 경로 조회 → (2) storage 파일 삭제 → (3) 성적 테이블 삭제 →
+    (4) iidx.profiles 삭제(온보딩 해제). storage_path는 score_uploads 행에서만
+    조회 가능하므로 DB를 먼저 지우면 실패 시 경로를 잃어 재시도로 파일을 지울
+    방법이 없다 — 그래서 파일을 먼저 지운다(이미 지워진 경로를 다시 지우는 건
+    no-op이라 재시도해도 안전). iidx.profiles는 마지막에 지워야 중간에 실패해도
     is_iidx_member()가 여전히 True라 재시도가 안전(멱등)하다.
     """
     if not crud_profiles.is_iidx_member(user.id):
         raise HTTPException(status_code=404, detail="IIDX 서비스에 가입하지 않은 사용자입니다.")
 
     storage_paths = crud_scores.get_all_storage_paths(user.id)
-    crud_scores.delete_user_scores(user.id)
     if storage_paths:
         score_storage.remove_paths(storage_paths)
+    crud_scores.delete_user_scores(user.id)
     crud_profiles.delete_iidx_profile(user.id)

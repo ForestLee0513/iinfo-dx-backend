@@ -9,11 +9,17 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.openapi import setup_docs
 from app.db.redis import close_redis
+from app.services.account import auth_service
 from app.services.iidx.admin import jobs as admin_jobs
 from app.services.iidx.difficulty_crawl import scheduler
 from app.services.iidx.scores import storage as score_storage
 
 logging.basicConfig(level=logging.INFO)
+
+# 전체 회원 탈퇴(계정 삭제) 시 iidx CSV 파일도 함께 정리되도록 훅 등록.
+# account 계층은 iidx를 import하지 않으므로(CLAUDE.md 의존 방향 규칙) 여기
+# main.py(양쪽을 이미 import하는 최상위 조립 지점)에서 연결한다.
+auth_service.register_pre_delete_hook(score_storage.cleanup_user_storage)
 
 
 @asynccontextmanager
