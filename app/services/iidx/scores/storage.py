@@ -59,9 +59,28 @@ def remove_paths(paths: list[str]) -> None:
     _storage().from_(SCORE_BUCKET).remove(paths)
 
 
+async def cleanup_user_storage(user_id: str) -> None:
+    """전체 회원 탈퇴(계정 삭제) 시 사용자의 CSV 파일을 모두 지운다.
+
+    app.services.account.auth_service.register_pre_delete_hook에 등록되어
+    auth.users 삭제(DB cascade) 직전에 호출된다 — cascade가 score_uploads 행을
+    지워버리면 storage_path를 잃어 파일을 찾을 방법이 없어지므로, 행이 아직
+    남아있는 지금 경로를 조회해 먼저 지운다.
+    """
+    from app.crud.iidx import scores as crud_scores
+
+    paths = await asyncio.to_thread(crud_scores.get_all_storage_paths, user_id)
+    if paths:
+        await asyncio.to_thread(remove_paths, paths)
+
+
 async def upload_csv_async(path: str, content: bytes) -> str:
     return await asyncio.to_thread(upload_csv, path, content)
 
 
 async def get_signed_url_async(path: str, expires_in: int = 3600) -> str:
     return await asyncio.to_thread(get_signed_url, path, expires_in)
+
+
+async def remove_paths_async(paths: list[str]) -> None:
+    await asyncio.to_thread(remove_paths, paths)
