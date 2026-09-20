@@ -62,62 +62,72 @@ async def upload_score_csv(
     raw = csv_bytes.decode("utf-8-sig")
     parsed: ParseResult = parse_csv(raw)
 
-    # Storage 업로드
+    # Storage 업로드 — insert_upload가 storage_path를 DB에 기록하기 전까지는
+    # 이 파일을 참조하는 행이 하나도 없다. 그 사이(파싱 매칭 등)에 실패하면
+    # 되찾을 방법이 없는 고아 파일이 되므로, insert_upload 성공 전 실패 시에는
+    # 방금 올린 파일을 즉시 롤백(삭제)한다. insert_upload 이후의 실패는 DB 행이
+    # storage_path를 갖고 있어 더 이상 고아가 아니므로 파일을 지우지 않는다
+    # (파일 없이 DB만 참조를 갖는 쪽이 더 나쁘다 — CSV 다운로드가 깨진다).
     upload_id = str(uuid.uuid4())
     storage_path = f"{user_id}/{play_style}/{upload_id}.csv"
     await score_storage.upload_csv_async(storage_path, csv_bytes)
 
-    # 곡 수 = 중복 없는 타이틀 수
-    song_count = len({s.title for s in parsed.scores})
+    try:
+        # 곡 수 = 중복 없는 타이틀 수
+        song_count = len({s.title for s in parsed.scores})
 
-    # 이전 활성 스냅샷과 비교한다. 최초 업로드의 모든 채보는 신규 기록이다.
-    previous_scores = await asyncio.to_thread(
-        crud_scores.get_current_score_values, user_id, play_style
-    )
+        # 이전 활성 스냅샷과 비교한다. 최초 업로드의 모든 채보는 신규 기록이다.
+        previous_scores = await asyncio.to_thread(
+            crud_scores.get_current_score_values, user_id, play_style
+        )
 
-    # songs/charts 마스터 매칭 — song_id 획득 + 크롤 CSV 누락 필드 보완
-    is_crawled = parsed.source == "crawled"
-    enriched = await enrich_async(parsed.scores, play_style, is_crawled)
+        # songs/charts 마스터 매칭 — song_id 획득 + 크롤 CSV 누락 필드 보완
+        is_crawled = parsed.source == "crawled"
+        enriched = await enrich_async(parsed.scores, play_style, is_crawled)
 
-    # 성적 행 bulk insert
-    score_rows = [
-        {
-            "title": e.score.title,
-            "difficulty": e.score.difficulty,
-            # 크롤 CSV: songs 테이블에서 보완된 값 우선, 없으면 CSV 원본(None)
-            "version": e.filled_version if is_crawled else e.score.version,
-            "genre": e.filled_genre if is_crawled else e.score.genre,
-            "artist": e.filled_artist if is_crawled else e.score.artist,
-            "play_count": e.score.play_count,
-            "last_played_at": (
-                e.score.last_played_at.isoformat() if e.score.last_played_at else None
-            ),
-            "miss_count": e.score.miss_count,
-            "level": e.score.level,
-            "ex_score": e.score.ex_score,
-            "pgreat": e.score.pgreat,
-            "great": e.score.great,
-            "clear_type": e.score.clear_type,
-            "dj_level": e.score.dj_level,
-            "song_id": e.song_id,
-        }
-        for e in enriched
-    ]
-    changes = classify_chart_score_changes(previous_scores, score_rows)
+        # 성적 행 bulk insert
+        score_rows = [
+            {
+                "title": e.score.title,
+                "difficulty": e.score.difficulty,
+                # 크롤 CSV: songs 테이블에서 보완된 값 우선, 없으면 CSV 원본(None)
+                "version": e.filled_version if is_crawled else e.score.version,
+                "genre": e.filled_genre if is_crawled else e.score.genre,
+                "artist": e.filled_artist if is_crawled else e.score.artist,
+                "play_count": e.score.play_count,
+                "last_played_at": (
+                    e.score.last_played_at.isoformat() if e.score.last_played_at else None
+                ),
+                "miss_count": e.score.miss_count,
+                "level": e.score.level,
+                "ex_score": e.score.ex_score,
+                "pgreat": e.score.pgreat,
+                "great": e.score.great,
+                "clear_type": e.score.clear_type,
+                "dj_level": e.score.dj_level,
+                "song_id": e.song_id,
+            }
+            for e in enriched
+        ]
+        changes = classify_chart_score_changes(previous_scores, score_rows)
 
-    # DB 레코드 생성
-    upload_row = await asyncio.to_thread(
-        crud_scores.insert_upload,
-        upload_id=upload_id,
-        user_id=user_id,
-        play_style=play_style,
-        source=parsed.source,
-        content_hash=content_hash,
-        storage_path=storage_path,
-        song_count=song_count,
-        added_chart_count=changes.added,
-        updated_chart_count=changes.updated,
-    )
+        # DB 레코드 생성
+        upload_row = await asyncio.to_thread(
+            crud_scores.insert_upload,
+            upload_id=upload_id,
+            user_id=user_id,
+            play_style=play_style,
+            source=parsed.source,
+            content_hash=content_hash,
+            storage_path=storage_path,
+            song_count=song_count,
+            added_chart_count=changes.added,
+            updated_chart_count=changes.updated,
+        )
+    except Exception:
+        await score_storage.remove_paths_async([storage_path])
+        raise
+
     await asyncio.to_thread(
         crud_scores.insert_chart_scores, upload_id, user_id, play_style, score_rows
     )

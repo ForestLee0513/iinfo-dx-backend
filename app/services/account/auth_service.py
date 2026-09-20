@@ -11,12 +11,17 @@ OAuth는 PKCE code flow다: authorize URL 생성(code_challenge 포함) →
 
 import base64
 import hashlib
+import inspect
+import logging
 import secrets
+from typing import Awaitable, Callable
 from urllib.parse import urlencode
 
 import httpx
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class AuthServiceError(Exception):
@@ -129,8 +134,40 @@ def _admin_headers() -> dict:
     }
 
 
+_pre_delete_hooks: list[Callable[[str], Awaitable[None] | None]] = []
+
+
+def register_pre_delete_hook(hook: Callable[[str], Awaitable[None] | None]) -> None:
+    """회원 탈퇴 시 각 서비스가 자기 소유 파일(Storage 등)을 정리할 수 있도록 훅을 등록한다.
+
+    delete_user()가 auth.users를 지우면 DB 행은 on delete cascade로 정리되지만
+    Supabase Storage의 실제 파일은 cascade 대상이 아니라 그대로 남는다 — 그래서
+    cascade가 storage_path를 담은 행(예: iidx.score_uploads)을 지우기 전에,
+    등록된 훅으로 각 서비스가 자신의 파일을 먼저 지울 기회를 준다.
+    account 계층은 iidx를 import하지 않는다는 의존 방향 규칙(CLAUDE.md)이 있어
+    이 모듈이 iidx의 정리 로직을 직접 호출할 수 없다 — 대신 iidx 쪽이 기동 시
+    (app/main.py) 자신의 정리 함수를 여기에 등록해 역방향 의존 없이 연결한다.
+    훅 하나가 실패해도 로그만 남기고 나머지 훅 + 실제 계정 삭제는 계속 진행한다
+    (정리 실패로 탈퇴 자체가 막히면 안 되므로) — 실패한 파일은 고아로 남을 수
+    있으니 알림/모니터링은 훅 구현체 쪽 책임이다.
+    """
+    _pre_delete_hooks.append(hook)
+
+
 async def delete_user(user_id: str) -> None:
-    """Supabase Admin API로 사용자 계정을 영구 삭제한다."""
+    """Supabase Admin API로 사용자 계정을 영구 삭제한다.
+
+    DB가 cascade로 삭제되어 storage_path 등의 참조를 잃기 전에, 등록된 사전
+    정리 훅(register_pre_delete_hook)을 먼저 실행한다.
+    """
+    for hook in _pre_delete_hooks:
+        try:
+            result = hook(user_id)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.exception("회원 탈퇴 사전 정리 훅 실패 (user_id=%s)", user_id)
+
     async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT) as client:
         response = await client.delete(
             f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
