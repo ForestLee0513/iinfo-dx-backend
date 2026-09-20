@@ -14,7 +14,9 @@
   쿠키 자동 전송)로 처리한다. 별도 오리진 FE는 fetch에 credentials:"include"
   필요(CORS allow_credentials는 main.py에서 이미 켜져 있다).
 - 회원 탈퇴: DELETE /me — auth.users 삭제(Admin API) 한 번으로 profiles 이하
-  전 테이블이 on delete cascade로 정리된다(복구 불가).
+  전 테이블이 on delete cascade로 정리된다(복구 불가). Storage에 남는 iidx CSV
+  파일 등은 cascade 대상이 아니므로 auth_service.delete_user에 등록된 사전
+  정리 훅(register_pre_delete_hook)이 DB가 지워지기 전에 먼저 지운다.
 
 쿠키/세션/PKCE/리다이렉트 공통 로직은 auth_common에 있다. 이 라우터는 사용자
 클라이언트(web)용이며 어드민 전용 로그인은 endpoints/admin_auth.py에 있다.
@@ -321,8 +323,11 @@ async def withdraw(user: CurrentUser, request: Request, response: Response):
 
     Supabase Admin API로 auth.users 행을 삭제하면 public.profiles가
     on delete cascade로 함께 삭제되고, 그 아래 iidx.profiles/follows/
-    user_bans/score_uploads 등도 profiles(id) 참조를 따라 연쇄 삭제된다 —
-    이 엔드포인트는 별도 정리 로직 없이 auth.users 삭제만 호출하면 된다.
+    user_bans/score_uploads 등도 profiles(id) 참조를 따라 연쇄 삭제된다.
+    다만 Storage의 실제 파일(iidx 업로드 CSV 등)은 cascade 대상이 아니어서
+    DB만 지우면 고아 파일로 남는다 — auth_service.delete_user가 실행 전에
+    등록된 사전 정리 훅(각 서비스가 main.py 기동 시 register_pre_delete_hook로
+    등록)을 호출해 DB가 지워지기 전에 storage_path를 조회하고 파일을 지운다.
     refresh 쿠키도 함께 지운다.
     """
     try:

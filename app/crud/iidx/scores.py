@@ -402,15 +402,29 @@ def get_chart_scores_by_upload(upload_id: str, user_id: str) -> list[dict]:
 # ── IIDX 서비스 탈퇴 ──────────────────────────────────────────────────────────
 
 def get_all_storage_paths(user_id: str) -> list[str]:
-    """사용자의 전체 업로드(SP/DP 모두) CSV storage 경로 목록. 서비스 탈퇴 시 파일 정리용."""
-    result = (
-        get_supabase_iidx()
-        .table("score_uploads")
-        .select("storage_path")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    return [r["storage_path"] for r in (result.data or [])]
+    """사용자의 전체 업로드(SP/DP 모두) CSV storage 경로 목록. 서비스/계정 탈퇴 시 파일 정리용.
+
+    업로드가 PostgREST 단일 응답 행 상한(_PAGE)을 넘을 수 있어 페이지네이션으로 전량 로드한다.
+    """
+    db = get_supabase_iidx()
+    paths: list[str] = []
+    start = 0
+    while True:
+        page = (
+            db.table("score_uploads")
+            .select("storage_path")
+            .eq("user_id", user_id)
+            .order("id")
+            .range(start, start + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        paths.extend(r["storage_path"] for r in page)
+        if len(page) < _PAGE:
+            break
+        start += _PAGE
+    return paths
 
 
 def delete_user_scores(user_id: str) -> None:
