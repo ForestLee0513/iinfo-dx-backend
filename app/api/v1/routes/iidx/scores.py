@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import logging
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -45,6 +46,8 @@ from app.services.iidx.scores import storage as score_storage, upload_token as _
 from app.services.iidx.scores.summary import build_score_summary
 from app.services.iidx.scores.upload_calendar import build_score_update_calendar, build_upload_calendar
 from app.services.iidx.scores.upload import upload_score_csv
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -130,17 +133,21 @@ async def upload_scores(user: UploadUser, body: ScoreUploadRequest):
     # 모든 스타일 업로드가 성공한 뒤에만 프로필 동기화 + 토큰 소모를 수행한다.
     if body.profile is not None:
         p = body.profile
-        await asyncio.to_thread(
-            crud_profiles.sync_iidx_stats,
-            user.id,
-            dj_name=p.djName,
-            dj_id=p.iidxId,
-            community_nickname=p.communityNickname,
-            play_count=p.playCount,
-            notes_radar=p.notesRadar.model_dump() if p.notesRadar is not None else None,
-            dan=p.dan.model_dump() if p.dan is not None else None,
-            arena_class=p.arenaClass.model_dump() if p.arenaClass is not None else None,
-        )
+        # 프로필 반영 실패가 이미 저장된 점수 업로드 전체를 실패시키지 않도록 격리한다.
+        try:
+            await asyncio.to_thread(
+                crud_profiles.sync_iidx_stats,
+                user.id,
+                dj_name=p.djName,
+                dj_id=p.iidxId,
+                community_nickname=p.communityNickname,
+                play_count=p.playCount,
+                notes_radar=p.notesRadar.model_dump() if p.notesRadar is not None else None,
+                dan=p.dan.model_dump() if p.dan is not None else None,
+                arena_class=p.arenaClass.model_dump() if p.arenaClass is not None else None,
+            )
+        except Exception:
+            logger.exception("IIDX 프로필 동기화 실패 (user=%s) — 점수 업로드는 유지", user.id)
 
     if user.upload_token is not None:
         await _upload_token.revoke_token(user.upload_token)
