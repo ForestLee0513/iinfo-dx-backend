@@ -1,6 +1,7 @@
 """사용자 성적 업로드/스냅샷 API 스키마."""
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -156,6 +157,13 @@ class ScoreSummaryResponse(BaseModel):
     available_levels: list[int]  # 곡 마스터에 채보가 있는 레벨 목록(선택 UI용)
 
 
+class UploadCalendarItem(BaseModel):
+    """날짜별 업로드 기록 한 건."""
+
+    play_style: Literal["SP", "DP"]
+    uploaded_at: datetime
+
+
 class UploadCalendarResponse(BaseModel):
     """GET /iidx/scores/upload-calendar 응답 — 날짜별 업로드 횟수(기여도 그래프용).
 
@@ -170,6 +178,7 @@ class UploadCalendarResponse(BaseModel):
     until: date  # 조회 종료 날짜 (tz 기준 년/월/일)
     total: int
     days: dict[date, int]  # "YYYY-MM-DD" -> 업로드 횟수. since~until 전체 날짜 포함(없으면 0)
+    uploads: dict[date, list[UploadCalendarItem]]  # "YYYY-MM-DD" -> 해당 날짜의 SP/DP 업로드 기록
 
 
 class ScoreChangeCounts(BaseModel):

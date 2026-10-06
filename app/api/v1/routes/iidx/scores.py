@@ -379,7 +379,8 @@ async def get_upload_calendar(
       `since` 생략 시 `until - (days-1)`을 사용한다(둘 다 생략하면 기존처럼
       tz 기준 오늘부터 `days`일 전까지). 업로드가 없는 날짜도 count=0으로
       포함해 FE가 별도 gap-filling 없이 캘린더를 그릴 수 있게 한다.
-    - style을 생략하면 SP/DP 업로드를 합산한다.
+    - style을 생략하면 SP/DP 업로드를 합산한다. `uploads`에는 날짜별
+      업로드 시각과 `play_style`(`SP` 또는 `DP`)을 담는다.
     """
     if style is not None:
         _check_style(style)

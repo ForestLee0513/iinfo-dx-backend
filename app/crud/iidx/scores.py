@@ -298,23 +298,35 @@ def get_previous_board_score_rows(user_id: str, play_style: str) -> list[dict]:
 def get_upload_dates(
     user_id: str, play_style: str | None = None, since: datetime | None = None
 ) -> list[dict]:
-    """사용자의 업로드 시각 목록을 반환한다 — 업로드 기여도 그래프용.
+    """사용자의 업로드 시각과 스타일 목록을 반환한다 — 업로드 기여도 그래프용.
 
     play_style을 지정하면 해당 스타일만, 생략하면 SP/DP 전체를 반환한다.
     since를 지정하면 그 시각 이후(포함) 업로드만 반환한다.
     """
-    query = (
-        get_supabase_iidx()
-        .table("score_uploads")
-        .select("uploaded_at")
-        .eq("user_id", user_id)
-    )
-    if play_style is not None:
-        query = query.eq("play_style", play_style)
-    if since is not None:
-        query = query.gte("uploaded_at", since.isoformat())
-    result = query.execute()
-    return result.data or []
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        query = (
+            get_supabase_iidx()
+            .table("score_uploads")
+            .select("id, uploaded_at, play_style")
+            .eq("user_id", user_id)
+        )
+        if play_style is not None:
+            query = query.eq("play_style", play_style)
+        if since is not None:
+            query = query.gte("uploaded_at", since.isoformat())
+        result = (
+            query.order("uploaded_at")
+            .order("id")
+            .range(offset, offset + _PAGE - 1)
+            .execute()
+        )
+        page = result.data or []
+        rows.extend(page)
+        if len(page) < _PAGE:
+            return rows
+        offset += _PAGE
 
 
 def get_score_update_dates(
