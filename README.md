@@ -362,7 +362,7 @@ uvicorn app.main:app --reload
 
 ## 접속 확인
 
-redacted-server 서버의 GitHub Actions 자동 배포와 운영 blue/green 전환은 [배포 문서](deploy/README.md)를 참고하세요.
+GitHub Actions 자동 배포와 운영 blue/green 전환은 [배포 문서](deploy/README.md)를 참고하세요.
 
 | 항목                               | URL                                 |
 | ---------------------------------- | ----------------------------------- |

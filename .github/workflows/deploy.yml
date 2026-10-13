@@ -1,4 +1,4 @@
-name: Deploy to redacted-server
+name: Deploy backend
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: redacted-server-iinfo-dx-deploy
+  group: backend-deploy
   cancel-in-progress: false
 
 jobs:
@@ -19,30 +19,58 @@ jobs:
     environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}
     timeout-minutes: 45
     steps:
+      - name: Check out deployment scripts
+        uses: actions/checkout@v4
+
+      - name: Configure SSH host key
+        env:
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KNOWN_HOSTS"
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/deploy_known_hosts"
+
       - name: Join Tailscale
         uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
-          ping: REDACTED_DEPLOY_HOST
+          ping: ${{ secrets.DEPLOY_HOST }}
+
+      - name: Install deployment secrets
+        env:
+          DEPLOY_BRANCH: ${{ github.ref_name }}
+          DEPLOY_ENV_CONTENT: ${{ secrets.DEPLOY_ENV }}
+          NPM_CREDENTIALS_JSON: ${{ secrets.NPM_CREDENTIALS_JSON }}
+          EXPECTED_SUPABASE_REF: ${{ secrets.EXPECTED_SUPABASE_REF }}
+          DEPLOY_DOMAIN: ${{ secrets.DEPLOY_DOMAIN }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: bash deploy/upload_secrets.sh
 
       - name: Clone and deploy exact commit
         env:
           DEPLOY_BRANCH: ${{ github.ref_name }}
           DEPLOY_SHA: ${{ github.sha }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_REPOSITORY: ${{ github.repository }}
         run: |
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null redacted-server@REDACTED_DEPLOY_HOST \
-            bash -s -- "$DEPLOY_BRANCH" "$DEPLOY_SHA" <<'REMOTE'
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_SSH_USER"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/deploy_known_hosts" \
+            "$DEPLOY_SSH_USER@$DEPLOY_HOST" bash -s -- "$DEPLOY_BRANCH" "$DEPLOY_SHA" "$DEPLOY_REPOSITORY" <<'REMOTE'
           set -euo pipefail
           branch=$1
           sha=$2
+          repository=$3
           [[ $branch == development || $branch == main ]]
           [[ $sha =~ ^[0-9a-f]{40}$ ]]
-          root=/home/redacted-server/deploy/iinfo-dx-backend
+          [[ $repository =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          root="$HOME/deploy/iinfo-dx-backend"
           mkdir -p "$root"
           if [[ ! -d $root/repo/.git ]]; then
-            git clone https://github.com/redacted-server/iinfo-dx-backend.git "$root/repo"
+            git clone "https://github.com/$repository.git" "$root/repo"
           fi
           git -C "$root/repo" fetch --no-tags origin "$branch"
           git -C "$root/repo" checkout --force --detach "$sha"

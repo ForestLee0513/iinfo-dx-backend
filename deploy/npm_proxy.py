@@ -1,4 +1,4 @@
-"""redacted-server의 Nginx Proxy Manager 개발·운영 프록시 대상을 설정한다."""
+"""Nginx Proxy Manager의 개발·운영 프록시 대상을 설정한다."""
 
 import json
 import os
@@ -45,20 +45,22 @@ def credentials() -> dict:
     return data
 
 
-def wildcard_certificate(token: str) -> int:
+def wildcard_certificate(token: str, domain: str) -> int:
     certificates = request("GET", "/nginx/certificates", token)
     for certificate in certificates:
-        if "*redacted.example.invalid" in certificate.get("domain_names", []) and certificate.get("provider") == "letsencrypt":
-            return certificate["id"]
-    raise RuntimeError("No Let's Encrypt *redacted.example.invalid certificate found in NPM")
+        if certificate.get("provider") != "letsencrypt":
+            continue
+        for name in certificate.get("domain_names", []):
+            if name.startswith("*.") and domain.endswith(name[1:]) and domain.count(".") == name.count("."):
+                return certificate["id"]
+    raise RuntimeError("No matching Let's Encrypt wildcard certificate found in NPM")
 
 
 def set_target(slot: str) -> None:
+    domain = os.environ["DEPLOY_DOMAIN"]
     if slot == "development":
-        domain = "redacted.example.invalid"
         target = "iinfo-dx-development-api"
     elif slot in {"blue", "green"}:
-        domain = "redacted.example.invalid"
         target = f"iinfo-dx-production-{slot}"
     else:
         raise RuntimeError("Target must be development, blue, or green")
@@ -90,7 +92,7 @@ def set_target(slot: str) -> None:
             "forward_host": target,
             "forward_port": 8000,
             "access_list_id": 0,
-            "certificate_id": wildcard_certificate(token),
+            "certificate_id": wildcard_certificate(token, domain),
             "ssl_forced": True,
             "http2_support": True,
             "block_exploits": True,
